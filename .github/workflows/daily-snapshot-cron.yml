@@ -1,0 +1,17 @@
+name: Daily Snapshot Cron
+
+on:
+  schedule:
+    - cron: "0 5 * * *"
+  workflow_dispatch:
+
+jobs:
+  trigger-snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Invoke Supabase edge function
+        run: |
+          curl --fail-with-body -X POST "${{ secrets.SUPABASE_FUNCTION_URL }}/daily-snapshot" \
+            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
+            -H "Content-Type: application/json" \
+            -d "{}"
