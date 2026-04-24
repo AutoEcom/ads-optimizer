@@ -47,7 +47,11 @@ export async function getUserTargets() {
   };
 }
 
-export async function upsertPlatformToken(platform: Platform, accessToken: string) {
+export async function upsertPlatformToken(
+  platform: Platform,
+  accessToken: string,
+  adAccountId?: string
+) {
   const supabase = createSupabaseBrowserClient();
   if (!supabase) throw new Error("Липсва Supabase конфигурация.");
 
@@ -62,6 +66,7 @@ export async function upsertPlatformToken(platform: Platform, accessToken: strin
       user_id: user.id,
       platform,
       access_token: accessToken,
+      ad_account_id: adAccountId ?? null,
       is_active: true
     },
     { onConflict: "user_id,platform" }

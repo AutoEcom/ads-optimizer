@@ -1,35 +1,43 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { ReactNode, useEffect, useMemo, useState } from "react";
+import useSWR from "swr";
+import { useRouter } from "next/navigation";
+import type { Route } from "next";
 import {
+  Activity,
+  AlertCircle,
   AlertTriangle,
-  BadgeAlert,
   Bot,
-  Copy,
   Eye,
-  Gauge,
-  KeyRound,
-  Layers,
-  Save,
-  Sparkles,
-  WandSparkles
+  Loader2,
+  Sparkles
 } from "lucide-react";
 
 import { useToast } from "@/hooks/use-toast";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle
+} from "@/components/ui/alert-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-  SheetTrigger
-} from "@/components/ui/sheet";
-import { Switch } from "@/components/ui/switch";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
   TableBody,
@@ -38,60 +46,76 @@ import {
   TableHeader,
   TableRow
 } from "@/components/ui/table";
-import { buildRulesFromSettings, evaluateUserRules } from "@/services/alert-rules";
-import { generateAdVariations, runDeepAudit } from "@/services/ai-service";
-import { getDigestTrend } from "@/services/daily-snapshot-service";
-import { campaigns, getCampaignsByPlatform, morningDigest } from "@/services/mock-data";
 import {
-  getUserTargets,
-  upsertPlatformToken,
-  upsertUserTargets
-} from "@/services/user-settings-service";
-import { AdVariation, AuditInsight, CampaignMetrics, CriticalIssue, RuleSettings } from "@/types";
-
-function formatCurrency(value: number) {
-  return `${value.toFixed(0)} лв.`;
-}
+  executeCampaignAction,
+  runDeepAudit,
+  runHealthAudit
+} from "@/services/ai-service";
+import { getDigestTrend } from "@/services/daily-snapshot-service";
+import { getCampaignsByPlatform, morningDigest } from "@/services/mock-data";
+import { formatCurrency } from "@/lib/utils";
+import { AuditInsight, CampaignMetrics, CriticalIssue } from "@/types";
 
 export function DashboardPage() {
   const [auditByCampaign, setAuditByCampaign] = useState<Record<string, AuditInsight>>({});
   const [loadingCampaignId, setLoadingCampaignId] = useState<string | null>(null);
+  const [isHealthAuditRunning, setIsHealthAuditRunning] = useState(false);
+  const [healthAudit, setHealthAudit] = useState<AuditInsight | null>(null);
+  const [isExecutingAction, setIsExecutingAction] = useState(false);
+  const [pendingExecution, setPendingExecution] = useState<
+    | { mode: "single"; campaign: CampaignMetrics; reason: string }
+    | { mode: "kill-all"; campaigns: CampaignMetrics[]; reason: string }
+    | null
+  >(null);
 
-  const [productDescription, setProductDescription] = useState("");
-  const [generatedAds, setGeneratedAds] = useState<AdVariation[]>([]);
-  const [isGeneratingAds, setIsGeneratingAds] = useState(false);
-  const generatorSectionRef = useRef<HTMLDivElement | null>(null);
-  const productInputRef = useRef<HTMLInputElement | null>(null);
+  const router = useRouter();
+  const [isPaywallOpen, setIsPaywallOpen] = useState(false);
   const { toast } = useToast();
 
-  const [targetCpaInput, setTargetCpaInput] = useState("20");
-  const [targetRoasInput, setTargetRoasInput] = useState("2.5");
-  const [savedTargets, setSavedTargets] = useState({ targetCpa: 20, targetRoas: 2.5 });
-
-  const [metaToken, setMetaToken] = useState("");
-  const [googleToken, setGoogleToken] = useState("");
-  const [settingsMessage, setSettingsMessage] = useState("");
+  const [savedTargets] = useState({ targetCpa: 20, targetRoas: 2.5 });
   const [digestState, setDigestState] = useState(morningDigest);
-  const [ruleSettings, setRuleSettings] = useState<RuleSettings>({
-    cpaAboveTargetEnabled: true,
-    ctrBelowThresholdEnabled: true,
-    ctrThreshold: 0.8,
-    targetCpaValue: 20
+
+  const { data: metaAdsData, error: metaAdsError, isLoading: isMetaLoading } = useSWR(
+    "/api/ads/meta",
+    fetchAdsPlatformData,
+    { revalidateOnFocus: false, dedupingInterval: 30_000 }
+  );
+  const {
+    data: googleAdsData,
+    error: googleAdsError,
+    isLoading: isGoogleLoading
+  } = useSWR("/api/ads/google", fetchAdsPlatformData, {
+    revalidateOnFocus: false,
+    dedupingInterval: 30_000
   });
 
+  const metaCampaignsLive = metaAdsData?.campaigns ?? getCampaignsByPlatform("Meta");
+  const googleCampaignsLive = googleAdsData?.campaigns ?? getCampaignsByPlatform("Google");
+  const metaCurrency = metaAdsData?.currencyCode ?? "EUR";
+  const googleCurrency = googleAdsData?.currencyCode ?? "EUR";
+  const metaTokenExpired = isTokenExpired(metaAdsError);
+  const googleTokenExpired = isTokenExpired(googleAdsError);
+
+  const allCampaigns = useMemo(() => {
+    return [...metaCampaignsLive, ...googleCampaignsLive];
+  }, [metaCampaignsLive, googleCampaignsLive]);
+
   const totals = useMemo(() => {
-    const spend = campaigns.reduce((sum, item) => sum + item.spend, 0);
-    const conversions = campaigns.reduce((sum, item) => sum + item.conversions, 0);
+    const spend = allCampaigns.reduce((sum, item) => sum + item.spend, 0);
+    const conversions = allCampaigns.reduce((sum, item) => sum + item.conversions, 0);
     const avgCpa = conversions > 0 ? spend / Math.max(1, conversions) : 0;
-    const avgRoas = campaigns.reduce((sum, item) => sum + item.roas, 0) / campaigns.length;
+    const avgRoas =
+      allCampaigns.length > 0
+        ? allCampaigns.reduce((sum, item) => sum + item.roas, 0) / allCampaigns.length
+        : 0;
 
     return { spend, conversions, avgCpa, avgRoas };
-  }, []);
+  }, [allCampaigns]);
 
   const criticalIssues = useMemo(() => {
     const targetCpa = savedTargets.targetCpa;
 
-    return campaigns.flatMap((campaign) => {
+    return allCampaigns.flatMap((campaign) => {
       const result: CriticalIssue[] = [];
 
       if (campaign.cpa > targetCpa * 1.2) {
@@ -99,9 +123,9 @@ export function DashboardPage() {
           id: `${campaign.id}-high-waste`,
           severity: "Критично",
           title: "High Waste",
-          description: `CPA е ${campaign.cpa.toFixed(1)} лв. при цел ${targetCpa.toFixed(
+          description: `CPA е ${campaign.cpa.toFixed(1)} EUR при цел ${targetCpa.toFixed(
             1
-          )} лв. Губиш по ${(campaign.cpa - targetCpa).toFixed(1)} лв. на продажба.`,
+          )} EUR. Губиш по ${(campaign.cpa - targetCpa).toFixed(1)} EUR на продажба.`,
           platform: campaign.platform,
           campaignId: campaign.id
         });
@@ -113,7 +137,8 @@ export function DashboardPage() {
           severity: "Критично",
           title: "Zero Conversion Leak",
           description: `Разходът е ${formatCurrency(
-            campaign.spend
+            campaign.spend,
+            campaign.currencyCode
           )} без конверсии. Спри кампанията и смени криейтива.`,
           platform: campaign.platform,
           campaignId: campaign.id
@@ -122,36 +147,23 @@ export function DashboardPage() {
 
       return result;
     });
-  }, [savedTargets.targetCpa]);
+  }, [allCampaigns, savedTargets.targetCpa]);
 
-  const dynamicRules = useMemo(() => buildRulesFromSettings(ruleSettings), [ruleSettings]);
-  const userAlerts = useMemo(() => evaluateUserRules(campaigns, dynamicRules), [dynamicRules]);
-  const metaCampaigns = useMemo(() => getCampaignsByPlatform("Meta"), []);
-  const googleCampaigns = useMemo(() => getCampaignsByPlatform("Google"), []);
+  const metaCampaigns = useMemo(() => metaCampaignsLive, [metaCampaignsLive]);
+  const googleCampaigns = useMemo(() => googleCampaignsLive, [googleCampaignsLive]);
 
-  useEffect(() => {
-    async function loadTargets() {
-      try {
-        const profileTargets = await getUserTargets();
-        if (profileTargets.targetCpa !== null && profileTargets.targetRoas !== null) {
-          setSavedTargets({
-            targetCpa: profileTargets.targetCpa,
-            targetRoas: profileTargets.targetRoas
-          });
-          setTargetCpaInput(String(profileTargets.targetCpa));
-          setTargetRoasInput(String(profileTargets.targetRoas));
-          setRuleSettings((prev) => ({
-            ...prev,
-            targetCpaValue: profileTargets.targetCpa
-          }));
-        }
-      } catch {
-        // Keep local defaults when profile does not exist yet.
-      }
-    }
+  const potentialSavedEur = useMemo(() => {
+    if (!healthAudit?.killList?.length) return 0;
+    return healthAudit.killList.reduce((sum, item) => sum + item.spend, 0);
+  }, [healthAudit]);
 
-    void loadTargets();
-  }, []);
+  const activeAlarmsCount = (healthAudit?.prioritizedActions.length ?? 0) + criticalIssues.length;
+
+  const connectionStatus = useMemo(() => {
+    if (metaTokenExpired || googleTokenExpired) return "Провери токените в Настройки";
+    if (allCampaigns.length > 0) return "Live данни активни";
+    return "Очаква свързване";
+  }, [metaTokenExpired, googleTokenExpired, allCampaigns.length]);
 
   useEffect(() => {
     async function loadDigest() {
@@ -180,111 +192,279 @@ export function DashboardPage() {
     }
   };
 
-  const handleAdGeneration = async () => {
-    if (!productDescription.trim()) return;
-    setIsGeneratingAds(true);
-    const results = await generateAdVariations(productDescription.trim());
-    setGeneratedAds(results);
-    setIsGeneratingAds(false);
+  const handleRunHealthAudit = async () => {
+    if (allCampaigns.length === 0) {
+      toast({
+        title: "Липсват кампании",
+        description: "Свържи акаунти от Настройки, за да стартираш Health Audit."
+      });
+      return;
+    }
+
+    setIsHealthAuditRunning(true);
+    try {
+      const result = await runHealthAudit(
+        allCampaigns,
+        savedTargets.targetCpa,
+        savedTargets.targetRoas,
+        "Home dashboard executive view"
+      );
+      setHealthAudit(result);
+    } catch (error) {
+      if ((error as Error).message === "PAYWALL_LIMIT_REACHED") {
+        setIsPaywallOpen(true);
+        return;
+      }
+      toast({
+        title: "Неуспешен AI health одит",
+        description: "Провери токените и account ID-тата в Настройки."
+      });
+    } finally {
+      setIsHealthAuditRunning(false);
+    }
   };
 
   const handleFixWithAi = (issue: CriticalIssue) => {
-    const campaign = campaigns.find((item) => item.id === issue.campaignId);
+    const campaign = allCampaigns.find((item) => item.id === issue.campaignId);
     if (!campaign) return;
 
     const autoFilledPrompt =
       `Продукт/оферта: ${campaign.campaignName}. ` +
       `Платформа: ${campaign.platform}. ` +
       `Проблем: ${issue.title}. ` +
-      `Контекст: Разход ${formatCurrency(campaign.spend)}, ` +
+      `Контекст: Разход ${formatCurrency(campaign.spend, campaign.currencyCode)}, ` +
       `конверсии ${campaign.conversions}, CTR ${campaign.ctr.toFixed(1)}%, ` +
-      `CPA ${campaign.cpa ? formatCurrency(campaign.cpa) : "няма стойност"}. ` +
+      `CPA ${campaign.cpa ? formatCurrency(campaign.cpa, campaign.currencyCode) : "няма стойност"}. ` +
       "Създай нов рекламен текст с ясен CTA и фокус върху по-висока конверсия.";
 
-    setProductDescription(autoFilledPrompt);
-    setGeneratedAds([]);
-    generatorSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-    setTimeout(() => productInputRef.current?.focus(), 250);
+    const next = `/generator?prefill=${encodeURIComponent(autoFilledPrompt)}` as Route;
+    router.push(next);
   };
 
-  const handleSaveTargets = async () => {
-    try {
-      const nextTargetCpa = Number(targetCpaInput);
-      const nextTargetRoas = Number(targetRoasInput);
-
-      await upsertUserTargets(nextTargetCpa, nextTargetRoas);
-      setSavedTargets({ targetCpa: nextTargetCpa, targetRoas: nextTargetRoas });
-      setRuleSettings((prev) => ({ ...prev, targetCpaValue: nextTargetCpa }));
-      setSettingsMessage("Таргетите са записани в Supabase.");
-    } catch {
-      setSettingsMessage("Неуспешен запис на таргетите.");
-    }
+  const queueExecution = (campaign: CampaignMetrics, reason: string) => {
+    setPendingExecution({ mode: "single", campaign, reason });
   };
 
-  const handleSaveToken = async (platform: "Meta" | "Google", token: string) => {
-    try {
-      await upsertPlatformToken(platform, token);
-      setSettingsMessage(`Токенът за ${platform} е записан.`);
-    } catch {
-      setSettingsMessage(`Неуспешен запис на токен за ${platform}.`);
-    }
-  };
+  const queueKillAll = () => {
+    const killCampaigns = (healthAudit?.killList ?? [])
+      .map((item) => allCampaigns.find((campaign) => campaign.id === item.campaignId))
+      .filter((campaign): campaign is CampaignMetrics => Boolean(campaign));
 
-  const copyToClipboard = async (value: string) => {
-    await navigator.clipboard.writeText(value);
-    toast({
-      title: "Копирано в клипборда!",
-      description: "Готово за поставяне в Meta Ads Manager!"
+    if (killCampaigns.length === 0) return;
+    setPendingExecution({
+      mode: "kill-all",
+      campaigns: killCampaigns,
+      reason: "3x Kill Rule: незабавно ограничаване на загубите."
     });
   };
 
+  const confirmExecution = async () => {
+    if (!pendingExecution) return;
+    setIsExecutingAction(true);
+    try {
+      if (pendingExecution.mode === "single") {
+        await executeCampaignAction({
+          platform: pendingExecution.campaign.platform,
+          campaignId: pendingExecution.campaign.id,
+          campaignName: pendingExecution.campaign.campaignName,
+          action: "PAUSE",
+          reason: pendingExecution.reason
+        });
+      } else {
+        await Promise.all(
+          pendingExecution.campaigns.map((campaign) =>
+            executeCampaignAction({
+              platform: campaign.platform,
+              campaignId: campaign.id,
+              campaignName: campaign.campaignName,
+              action: "PAUSE",
+              reason: pendingExecution.reason
+            })
+          )
+        );
+      }
+
+      toast({
+        title: "Изпълнено успешно",
+        description: "Кампанията е спряна успешно. Промяната е записана в лога."
+      });
+      setPendingExecution(null);
+    } catch {
+      toast({
+        title: "Грешка при изпълнение",
+        description: "Действието не беше приложено. Провери токена и опитай отново."
+      });
+    } finally {
+      setIsExecutingAction(false);
+    }
+  };
+
+  const displayCurrency = metaCurrency === googleCurrency ? metaCurrency : "EUR";
+
   return (
     <main className="mx-auto min-h-screen max-w-7xl space-y-6 px-4 py-8">
-      <section className="grid gap-4 md:grid-cols-2">
+      <section className="grid gap-4">
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-xl">
-              <Layers className="h-5 w-5 text-primary" />
-              Вход и акаунт
-            </CardTitle>
-            <CardDescription>Supabase Auth (имейл и парола)</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <Input placeholder="Имейл" />
-            <Input type="password" placeholder="Парола" />
-            <div className="flex gap-2">
-              <Button>Вход</Button>
-              <Button variant="outline">Регистрация</Button>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-xl">
-              <Gauge className="h-5 w-5 text-primary" />
+              <Activity className="h-5 w-5 text-primary" />
               Онбординг: Свържи акаунт
             </CardTitle>
-            <CardDescription>Мок стъпка за свързване на рекламни платформи</CardDescription>
+            <CardDescription>Първа стъпка за активиране на живи данни</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
-            <Button className="w-full" variant="outline">
+            <Button className="w-full" variant="outline" onClick={() => router.push("/settings" as Route)}>
               Свържи Meta Ads
             </Button>
-            <Button className="w-full" variant="outline">
+            <Button className="w-full" variant="outline" onClick={() => router.push("/settings" as Route)}>
               Свържи Google Ads
             </Button>
-            <p className="text-sm text-muted-foreground">Статус: Очаква свързване</p>
+            <p className="text-sm text-muted-foreground">Статус: {connectionStatus}</p>
           </CardContent>
         </Card>
       </section>
 
-      <section className="grid gap-4 md:grid-cols-4">
-        <MetricCard label="Общ разход" value={formatCurrency(totals.spend)} progress={78} />
-        <MetricCard label="Общо конверсии" value={`${totals.conversions}`} progress={62} />
-        <MetricCard label="Среден CPA" value={formatCurrency(totals.avgCpa)} progress={41} />
-        <MetricCard label="Среден ROAS" value={totals.avgRoas.toFixed(2)} progress={57} />
-      </section>
+      <Card>
+        <CardHeader>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <CardTitle className="text-xl text-foreground">Executive View</CardTitle>
+              <CardDescription>Резюме за състоянието на рекламния акаунт.</CardDescription>
+            </div>
+            <span className="shrink-0 rounded-full border border-teal-500/30 px-3 py-1 text-xs text-muted-foreground">
+              {metaCurrency === googleCurrency ? `Валута: ${metaCurrency}` : "Валута: Mixed currencies"}
+            </span>
+          </div>
+        </CardHeader>
+        <CardContent className="grid gap-6 lg:grid-cols-[220px_1fr]">
+          <div className="flex items-center justify-center">
+            <RadialScore score={healthAudit?.healthScore ?? 0} />
+          </div>
+          <div className="space-y-4">
+            <div className="grid gap-3 sm:grid-cols-3">
+              <MetricCard
+                label={<span>Потенциално спасени EUR</span>}
+                value={formatCurrency(potentialSavedEur, displayCurrency)}
+                progress={potentialSavedEur > 0 ? 48 : 0}
+              />
+              <MetricCard label="Активни аларми" value={`${activeAlarmsCount}`} progress={40} />
+              <MetricCard
+                label={
+                  <span className="inline-flex items-center gap-1">
+                    Общ разход
+                    {metaCurrency !== googleCurrency ? (
+                      <span title="Внимание: Данните са в различни валути">
+                        <AlertCircle className="h-4 w-4 text-amber-400" />
+                      </span>
+                    ) : null}
+                  </span>
+                }
+                value={formatCurrency(totals.spend, metaCurrency)}
+                progress={78}
+              />
+            </div>
+
+            <div className="premium-glow rounded-xl border border-teal-500/20 p-4">
+              <p className="text-sm font-medium text-foreground">Top Priority Actions</p>
+              <div className="mt-3">
+                <Button
+                  className="bg-emerald-500 text-white hover:bg-emerald-600 sm:w-auto"
+                  onClick={() => void handleRunHealthAudit()}
+                  disabled={isHealthAuditRunning}
+                >
+                  {isHealthAuditRunning ? (
+                    <span className="inline-flex items-center gap-2">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Анализ...
+                    </span>
+                  ) : (
+                    "Обнови AI приоритетите"
+                  )}
+                </Button>
+              </div>
+            </div>
+
+            <div>
+              <p className="text-sm font-medium">Prioritized Action Plan</p>
+              <div className="mt-2 space-y-2">
+                {(healthAudit?.prioritizedActions ?? []).slice(0, 5).map((action) => (
+                  <Alert key={`${action.platform}-${action.task}`} className="border-primary/40">
+                    <AlertTitle>
+                      [{action.platform}] Impact {action.impactScore}
+                    </AlertTitle>
+                    <AlertDescription>
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="font-medium text-foreground">{action.task}</p>
+                          <p>{action.reason}</p>
+                        </div>
+                        {action.actionType === "PAUSE" && action.campaignId ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              const campaign = allCampaigns.find((item) => item.id === action.campaignId);
+                              if (!campaign) return;
+                              queueExecution(campaign, action.reason);
+                            }}
+                          >
+                            Изпълни
+                          </Button>
+                        ) : null}
+                      </div>
+                    </AlertDescription>
+                  </Alert>
+                ))}
+                {!healthAudit || healthAudit.prioritizedActions.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">
+                    Стартирай Health Audit, за да видиш ranked action plan.
+                  </p>
+                ) : null}
+              </div>
+            </div>
+            <div>
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-medium text-red-300">Kill List (3x Kill Rule)</p>
+                {healthAudit && healthAudit.killList.length > 0 ? (
+                  <Button size="sm" variant="outline" className="border-red-500/50 text-red-300" onClick={queueKillAll}>
+                    Спри всички (Kill All)
+                  </Button>
+                ) : null}
+              </div>
+              <div className="mt-2 space-y-2">
+                {(healthAudit?.killList ?? []).slice(0, 5).map((item) => (
+                  <Alert key={item.campaignId} className="border-red-500/50 bg-red-500/5">
+                    <AlertTitle>
+                      {item.campaignName} ({item.platform})
+                    </AlertTitle>
+                    <AlertDescription>
+                      <div className="flex items-start justify-between gap-3">
+                        <p>
+                          {item.reason} Разход: {formatCurrency(item.spend)}.
+                        </p>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            const campaign = allCampaigns.find((campaign) => campaign.id === item.campaignId);
+                            if (!campaign) return;
+                            queueExecution(campaign, item.reason);
+                          }}
+                        >
+                          Изпълни
+                        </Button>
+                      </div>
+                    </AlertDescription>
+                  </Alert>
+                ))}
+                {healthAudit && healthAudit.killList.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">Няма кампании, които удрят 3x Kill Rule.</p>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>
@@ -295,6 +475,21 @@ export function DashboardPage() {
           <CardDescription>Сигнали спрямо целевия CPA от профила</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
+          {metaTokenExpired ? (
+            <Alert className="border-amber-500/40">
+              <AlertTitle>Meta връзката е прекъсната</AlertTitle>
+              <AlertDescription className="space-y-2">
+                <p>Токенът е изтекъл. Свържи отново Meta акаунта.</p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => router.push("/settings" as Route)}
+                >
+                  Свържи отново
+                </Button>
+              </AlertDescription>
+            </Alert>
+          ) : null}
           {criticalIssues.map((issue) => (
             <Alert key={issue.id} className="border-red-500/50 bg-red-500/5">
               <AlertTitle>
@@ -308,234 +503,59 @@ export function DashboardPage() {
               </AlertDescription>
             </Alert>
           ))}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-xl">
-            <KeyRound className="h-5 w-5 text-primary" />
-            Настройки за MVP интеграции
-          </CardTitle>
-          <CardDescription>Ръчно поставяне на токени (Meta/Google) и таргети за аларми.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid gap-2 md:grid-cols-[1fr_120px_120px]">
-            <Input
-              value={targetCpaInput}
-              onChange={(event) => setTargetCpaInput(event.target.value)}
-              placeholder="Целеви CPA (лв.)"
-            />
-            <Input
-              value={targetRoasInput}
-              onChange={(event) => setTargetRoasInput(event.target.value)}
-              placeholder="Целеви ROAS"
-            />
-            <Button onClick={handleSaveTargets}>
-              <Save className="mr-1 h-4 w-4" />
-              Запази цели
-            </Button>
-          </div>
-
-          <div className="grid gap-2 md:grid-cols-[1fr_160px]">
-            <Input
-              value={metaToken}
-              onChange={(event) => setMetaToken(event.target.value)}
-              placeholder="Meta Access Token"
-            />
-            <Button variant="outline" onClick={() => handleSaveToken("Meta", metaToken)}>
-              Запази Meta токен
-            </Button>
-          </div>
-
-          <div className="grid gap-2 md:grid-cols-[1fr_160px]">
-            <Input
-              value={googleToken}
-              onChange={(event) => setGoogleToken(event.target.value)}
-              placeholder="Google Developer Token"
-            />
-            <Button variant="outline" onClick={() => handleSaveToken("Google", googleToken)}>
-              Запази Google токен
-            </Button>
-          </div>
-
-          {settingsMessage ? <p className="text-sm text-primary">{settingsMessage}</p> : null}
-          <p className="text-xs text-muted-foreground">
-            Активни цели: CPA {savedTargets.targetCpa} лв., ROAS {savedTargets.targetRoas}
-          </p>
+          {!metaTokenExpired && criticalIssues.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              Няма активни критични проблеми. Свържи акаунти за live alerts.
+            </p>
+          ) : null}
         </CardContent>
       </Card>
 
       <section className="grid gap-4 lg:grid-cols-2">
-        <CampaignTable
-          title="Meta кампании"
-          rows={metaCampaigns}
-          onAudit={handleDeepAudit}
-          loadingId={loadingCampaignId}
-          auditByCampaign={auditByCampaign}
-        />
-        <CampaignTable
-          title="Google кампании"
-          rows={googleCampaigns}
-          onAudit={handleDeepAudit}
-          loadingId={loadingCampaignId}
-          auditByCampaign={auditByCampaign}
-        />
+        {isMetaLoading ? (
+          <MetaCampaignSkeleton />
+        ) : (
+          <CampaignTable
+            title="Meta кампании"
+            rows={metaCampaigns}
+            onAudit={handleDeepAudit}
+            loadingId={loadingCampaignId}
+            auditByCampaign={auditByCampaign}
+          />
+        )}
+        {googleTokenExpired ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>Google кампании</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <Alert className="border-amber-500/40">
+                <AlertTitle>Google връзката е прекъсната</AlertTitle>
+                <AlertDescription className="space-y-2">
+                  <p>Токенът е изтекъл. Свържи отново Google акаунта.</p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => router.push("/settings" as Route)}
+                  >
+                    Свържи отново
+                  </Button>
+                </AlertDescription>
+              </Alert>
+            </CardContent>
+          </Card>
+        ) : isGoogleLoading ? (
+          <MetaCampaignSkeleton title="Google кампании" />
+        ) : (
+          <CampaignTable
+            title="Google кампании"
+            rows={googleCampaigns}
+            onAudit={handleDeepAudit}
+            loadingId={loadingCampaignId}
+            auditByCampaign={auditByCampaign}
+          />
+        )}
       </section>
-
-      <Card ref={generatorSectionRef}>
-        <CardHeader>
-          <div className="flex items-center justify-between gap-2">
-            <CardTitle className="flex items-center gap-2 text-xl">
-              <BadgeAlert className="h-5 w-5 text-primary" />
-              Правила за алерти
-            </CardTitle>
-            <Sheet>
-              <SheetTrigger asChild>
-                <Button variant="outline" size="sm">
-                  Rule Settings
-                </Button>
-              </SheetTrigger>
-              <SheetContent>
-                <SheetHeader>
-                  <SheetTitle>Control Center: Rule Settings</SheetTitle>
-                  <SheetDescription>
-                    Включвай и изключвай глобалните правила за мониторинг.
-                  </SheetDescription>
-                </SheetHeader>
-
-                <div className="mt-6 space-y-6">
-                  <div className="flex items-center justify-between gap-3 rounded-lg border border-border/70 p-3">
-                    <p className="text-sm">Alert if CPA is 20% above target</p>
-                    <Switch
-                      checked={ruleSettings.cpaAboveTargetEnabled}
-                      onCheckedChange={(value) =>
-                        setRuleSettings((prev) => ({
-                          ...prev,
-                          cpaAboveTargetEnabled: value
-                        }))
-                      }
-                    />
-                  </div>
-
-                  <div className="flex items-center justify-between gap-3 rounded-lg border border-border/70 p-3">
-                    <p className="text-sm">Alert if CTR drops below 0.8%</p>
-                    <Switch
-                      checked={ruleSettings.ctrBelowThresholdEnabled}
-                      onCheckedChange={(value) =>
-                        setRuleSettings((prev) => ({
-                          ...prev,
-                          ctrBelowThresholdEnabled: value
-                        }))
-                      }
-                    />
-                  </div>
-
-                  <div className="space-y-2 rounded-lg border border-border/70 p-3">
-                    <p className="text-sm">Target CPA Value</p>
-                    <Input
-                      type="number"
-                      min={1}
-                      step="0.1"
-                      value={ruleSettings.targetCpaValue}
-                      onChange={(event) =>
-                        setRuleSettings((prev) => ({
-                          ...prev,
-                          targetCpaValue: Number(event.target.value || 0)
-                        }))
-                      }
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      Правилото за CPA използва праг {Number((ruleSettings.targetCpaValue * 1.2).toFixed(2))} лв.
-                    </p>
-                  </div>
-                </div>
-              </SheetContent>
-            </Sheet>
-          </div>
-          <CardDescription>JSON-логика за потребителски сигнали</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {userAlerts.map((alert) => (
-            <Alert key={alert.id} className="border-primary/40">
-              <AlertTitle>Потребителско правило</AlertTitle>
-              <AlertDescription>{alert.message}</AlertDescription>
-            </Alert>
-          ))}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-xl">
-            <WandSparkles className="h-5 w-5 text-primary" />
-            AI генератор на реклами
-          </CardTitle>
-          <CardDescription>
-            Въведи продуктово описание и получи 3 вариации (заглавие, текст, hook)
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex gap-2">
-            <Input
-              ref={productInputRef}
-              value={productDescription}
-              onChange={(event) => setProductDescription(event.target.value)}
-              placeholder="Пример: Онлайн курс по дигитален маркетинг за малки бизнеси"
-            />
-            <Button onClick={handleAdGeneration} disabled={isGeneratingAds}>
-              {isGeneratingAds ? "Генериране..." : "Генерирай"}
-            </Button>
-          </div>
-
-          <div className="grid gap-3 md:grid-cols-3">
-            {generatedAds.map((variant) => (
-              <Card key={variant.headline} className="border-primary/30">
-                <CardHeader className="pb-2">
-                  <div className="flex items-start justify-between gap-2">
-                    <CardTitle className="text-base">{variant.headline}</CardTitle>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="h-8 px-2 transition-colors hover:bg-primary/10"
-                      onClick={() => void copyToClipboard(variant.headline)}
-                    >
-                      <Copy className="mr-1 h-3.5 w-3.5" />
-                      Copy
-                    </Button>
-                  </div>
-                </CardHeader>
-                <CardContent className="space-y-3 text-sm text-muted-foreground">
-                  <div className="flex items-start justify-between gap-2">
-                    <p>{variant.primaryText}</p>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="h-8 px-2 transition-colors hover:bg-primary/10"
-                      onClick={() => void copyToClipboard(variant.primaryText)}
-                    >
-                      <Copy className="mr-1 h-3.5 w-3.5" />
-                      Copy
-                    </Button>
-                  </div>
-                  <div className="flex items-start justify-between gap-2">
-                    <p className="text-primary">Hook: {variant.hook}</p>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="h-8 px-2 transition-colors hover:bg-primary/10"
-                      onClick={() => void copyToClipboard(variant.hook)}
-                    >
-                      <Copy className="mr-1 h-3.5 w-3.5" />
-                      Copy
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
 
       <Card>
         <CardHeader>
@@ -561,10 +581,42 @@ export function DashboardPage() {
         </CardHeader>
         <CardContent>
           <pre className="overflow-x-auto rounded-md border border-border/60 bg-muted/20 p-4 text-xs text-muted-foreground">
-            {JSON.stringify({ campaigns, dynamicRules, digestState }, null, 2)}
+            {JSON.stringify({ campaigns: allCampaigns, healthAudit, digestState }, null, 2)}
           </pre>
         </CardContent>
       </Card>
+
+      <Dialog open={isPaywallOpen} onOpenChange={setIsPaywallOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Достигнахте лимита за вашия план</DialogTitle>
+            <DialogDescription>
+              Надградете за неограничени одити и пълен достъп до AI оптимизации.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button onClick={() => setIsPaywallOpen(false)}>Разбрах</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog open={Boolean(pendingExecution)} onOpenChange={(isOpen) => !isOpen && setPendingExecution(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Сигурни ли сте, че искате да спрете тази кампания?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Това действие ще бъде изпратено директно към рекламния акаунт и записано в execution log.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isExecutingAction}>Отказ</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void confirmExecution()} disabled={isExecutingAction}>
+              {isExecutingAction ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Потвърди
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </main>
   );
 }
@@ -574,7 +626,7 @@ function MetricCard({
   value,
   progress
 }: {
-  label: string;
+  label: ReactNode;
   value: string;
   progress: number;
 }) {
@@ -625,9 +677,9 @@ function CampaignTable({
             {rows.map((campaign) => (
               <TableRow key={campaign.id}>
                 <TableCell>{campaign.campaignName}</TableCell>
-                <TableCell>{formatCurrency(campaign.spend)}</TableCell>
+                <TableCell>{formatCurrency(campaign.spend, campaign.currencyCode)}</TableCell>
                 <TableCell>{campaign.conversions}</TableCell>
-                <TableCell>{campaign.cpa ? formatCurrency(campaign.cpa) : "-"}</TableCell>
+                <TableCell>{campaign.cpa ? formatCurrency(campaign.cpa, campaign.currencyCode) : "-"}</TableCell>
                 <TableCell>{campaign.roas.toFixed(1)}</TableCell>
                 <TableCell className="text-right">
                   <Button
@@ -656,14 +708,24 @@ function CampaignTable({
           if (!insight) return null;
 
           return (
-            <Alert key={insight.campaignId} className="border-primary/40">
+            <Alert key={insight.campaignId ?? campaign.id} className="border-primary/40">
               <AlertTitle>AI одит: {campaign.campaignName}</AlertTitle>
               <AlertDescription>
-                <ul className="list-disc pl-4">
-                  {insight.bullets.map((bullet) => (
-                    <li key={bullet}>{bullet}</li>
+                <ul className="space-y-1">
+                  {insight.prioritizedActions.slice(0, 3).map((action) => (
+                    <li key={action.task}>
+                      <span className="font-medium">
+                        [{action.platform}] Impact {action.impactScore}:
+                      </span>{" "}
+                      {action.task}
+                    </li>
                   ))}
                 </ul>
+                {insight.killList.length > 0 ? (
+                  <p className="mt-2 text-red-300">
+                    Kill List: {insight.killList.map((item) => item.campaignName).join(", ")}
+                  </p>
+                ) : null}
               </AlertDescription>
             </Alert>
           );
@@ -671,4 +733,77 @@ function CampaignTable({
       </CardContent>
     </Card>
   );
+}
+
+function RadialScore({ score }: { score: number }) {
+  const safeScore = Math.max(0, Math.min(100, score));
+  return (
+    <div className="relative h-36 w-36">
+      <div
+        className="h-36 w-36 rounded-full shadow-[0_0_24px_rgba(45,212,191,0.35)]"
+        style={{
+          background: `conic-gradient(hsl(var(--primary)) ${safeScore * 3.6}deg, hsl(var(--muted)) 0deg)`
+        }}
+      />
+      <div className="absolute inset-3 flex items-center justify-center rounded-full bg-background">
+        <div className="text-center">
+          <p className="text-3xl font-semibold">{safeScore}</p>
+          <p className="text-xs text-muted-foreground">Health Score</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MetaCampaignSkeleton({ title = "Meta кампании" }: { title?: string }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{title}</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <Skeleton className="h-10 w-full" />
+        <Skeleton className="h-10 w-full" />
+        <Skeleton className="h-10 w-full" />
+      </CardContent>
+    </Card>
+  );
+}
+
+type AdsPlatformData = {
+  campaigns: CampaignMetrics[];
+  currencyCode: string;
+};
+
+type AdsPlatformError = Error & {
+  status?: number;
+  code?: string;
+};
+
+async function fetchAdsPlatformData(url: string): Promise<AdsPlatformData> {
+  const response = await fetch(url, { cache: "no-store" });
+  const payload = (await response.json()) as {
+    campaigns?: CampaignMetrics[];
+    currencyCode?: string;
+    error?: string;
+    code?: string;
+  };
+
+  if (!response.ok) {
+    const error = new Error(payload.error ?? "Неуспешно зареждане на данни.") as AdsPlatformError;
+    error.status = response.status;
+    error.code = payload.code;
+    throw error;
+  }
+
+  return {
+    campaigns: payload.campaigns ?? [],
+    currencyCode: payload.currencyCode ?? "EUR"
+  };
+}
+
+function isTokenExpired(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+  const err = error as AdsPlatformError;
+  return err.status === 401 || err.code === "TOKEN_EXPIRED";
 }

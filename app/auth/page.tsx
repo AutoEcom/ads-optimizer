@@ -112,7 +112,7 @@ export default function AuthPage() {
         return;
       }
 
-      router.push("/dashboard");
+      router.push(redirectPath);
       router.refresh();
     } catch {
       setError("Няма връзка към Supabase. Провери URL и ключовете в .env.local.");

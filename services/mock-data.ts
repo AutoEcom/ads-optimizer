@@ -11,6 +11,7 @@ export const campaigns: CampaignMetrics[] = [
     id: "meta-01",
     platform: "Meta",
     campaignName: "Meta | Пролетна промоция",
+    currencyCode: "EUR",
     spend: 420,
     conversions: 2,
     cpa: 210,
@@ -23,6 +24,7 @@ export const campaigns: CampaignMetrics[] = [
     id: "meta-02",
     platform: "Meta",
     campaignName: "Meta | Ремаркетинг 30 дни",
+    currencyCode: "EUR",
     spend: 160,
     conversions: 0,
     cpa: 0,
@@ -35,6 +37,7 @@ export const campaigns: CampaignMetrics[] = [
     id: "google-01",
     platform: "Google",
     campaignName: "Google | Search Бранд",
+    currencyCode: "EUR",
     spend: 240,
     conversions: 9,
     cpa: 26.7,
@@ -47,6 +50,7 @@ export const campaigns: CampaignMetrics[] = [
     id: "google-02",
     platform: "Google",
     campaignName: "Google | Performance Max",
+    currencyCode: "EUR",
     spend: 380,
     conversions: 1,
     cpa: 380,
@@ -92,7 +96,7 @@ export function detectCriticalIssues(data: CampaignMetrics[]): CriticalIssue[] {
           id: `${campaign.id}-zero-conversions`,
           severity: "Критично",
           title: "Разход без конверсии",
-          description: `Кампанията е изразходвала ${campaign.spend.toFixed(0)} лв. без нито една конверсия.`,
+          description: `Кампанията е изразходвала ${campaign.spend.toFixed(0)} EUR без нито една конверсия.`,
           platform: campaign.platform,
           campaignId: campaign.id
         });
@@ -103,7 +107,7 @@ export function detectCriticalIssues(data: CampaignMetrics[]): CriticalIssue[] {
           id: `${campaign.id}-high-cpa`,
           severity: "Висок риск",
           title: "CPA над целта",
-          description: `CPA е ${campaign.cpa.toFixed(1)} лв. при цел ${campaign.targetCpa.toFixed(1)} лв.`,
+          description: `CPA е ${campaign.cpa.toFixed(1)} EUR при цел ${campaign.targetCpa.toFixed(1)} EUR.`,
           platform: campaign.platform,
           campaignId: campaign.id
         });

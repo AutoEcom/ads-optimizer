@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { SidebarShell } from "@/components/layout/sidebar-shell";
 import { Toaster } from "@/components/ui/toaster";
 import "./globals.css";
 
@@ -15,7 +16,7 @@ export default function RootLayout({
   return (
     <html lang="bg" className="dark">
       <body>
-        {children}
+        <SidebarShell>{children}</SidebarShell>
         <Toaster />
       </body>
     </html>

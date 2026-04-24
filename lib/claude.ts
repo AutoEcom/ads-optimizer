@@ -1,4 +1,5 @@
-import { AdVariation, CampaignMetrics } from "@/types";
+import { AdVariation, AuditInsight, CampaignMetrics, PrioritizedAction } from "@/types";
+import { buildHeuristicActions, buildKillList, computeHealthScore } from "@/lib/audit-rules";
 
 const CLAUDE_MODEL = "claude-3-5-sonnet-20241022";
 
@@ -14,11 +15,15 @@ export async function createCampaignAudit(args: {
   const { campaign, targetCpa, targetRoas } = args;
 
   const fallback = [
-    `Проблем: CPA е ${campaign.cpa.toFixed(1)} лв. при цел ${targetCpa.toFixed(1)} лв., което означава, че губиш пари.`,
+    campaign.impressions < 500
+      ? "Проблем: Кампанията е в Learning фаза (под 500 импресии), данните са още рано за агресивни промени."
+      : `Проблем: CPA е ${campaign.cpa.toFixed(1)} лв. при цел ${targetCpa.toFixed(1)} лв., което означава, че губиш пари.`,
     campaign.ctr < 1
       ? "Възможност: CTR е под 1% - смени първия ред и визуалния hook с конкретна полза + силен CTA."
       : "Възможност: CTR е приемлив, но ROAS е слаб - тествай оферта с по-ясна стойност и краен срок.",
-    campaign.conversions === 0 && campaign.spend > 100
+    campaign.impressions < 500
+      ? "Следваща стъпка: Кампанията е нова - изчакай още 48 часа за стабилни сигнали преди да режеш бюджета."
+      : campaign.conversions === 0 && campaign.spend > 100
       ? "Следваща стъпка: Спри тази кампания веднага и пусни нов текст/крийтив с различен ъгъл."
       : `Следваща стъпка: Пренасочи 20% бюджет към вариант с цел ROAS ${targetRoas.toFixed(1)}+.`
   ];
@@ -31,6 +36,7 @@ export async function createCampaignAudit(args: {
   const systemPrompt =
     "Ти си Senior Media Buyer. Анализираш JSON данни от Google/Meta Ads. " +
     "Сравнявай CPA с целевия CPA на клиента. " +
+    "Ако импресиите са под 500, маркирай кампанията като Learning и препоръчай изчакване 48 часа. " +
     "Ако CTR е под 1%, предложи конкретна промяна в криейтива. " +
     "Говори директно и остро, когато клиентът губи пари. " +
     "Върни точно 3 bullets на български: Проблем, Възможност, Следваща стъпка.";
@@ -148,4 +154,161 @@ export async function createAdVariations(productDescription: string): Promise<Ad
   } catch {
     return fallback;
   }
+}
+
+export async function createHealthAudit(args: {
+  campaigns: CampaignMetrics[];
+  targetCpa: number;
+  targetRoas: number;
+  businessContext?: string;
+}): Promise<AuditInsight> {
+  const { campaigns, targetCpa, targetRoas, businessContext } = args;
+  const killList = buildKillList(campaigns, targetCpa);
+  const heuristicActions = buildHeuristicActions(campaigns, targetCpa);
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+
+  if (!apiKey) {
+    return {
+      healthScore: computeHealthScore({
+        campaigns,
+        targetCpa,
+        killCount: killList.length,
+        actionCount: heuristicActions.length
+      }),
+      prioritizedActions: heuristicActions.slice(0, 6),
+      killList
+    };
+  }
+
+  const domains = [
+    "Budget",
+    "Creative",
+    "Audience",
+    "Technical",
+    "Bidding",
+    "Strategy"
+  ] as const;
+
+  const subAgentActions = await Promise.all(
+    domains.map((domain) =>
+      runSubAgentAudit({
+        apiKey,
+        domain,
+        campaigns,
+        targetCpa,
+        targetRoas,
+        businessContext
+      })
+    )
+  );
+
+  const merged = dedupeActions([...heuristicActions, ...subAgentActions.flat()]).sort(
+    (a, b) => b.impactScore - a.impactScore
+  );
+
+  return {
+    healthScore: computeHealthScore({
+      campaigns,
+      targetCpa,
+      killCount: killList.length,
+      actionCount: merged.length
+    }),
+    prioritizedActions: merged.slice(0, 8),
+    killList
+  };
+}
+
+async function runSubAgentAudit(args: {
+  apiKey: string;
+  domain: "Budget" | "Creative" | "Audience" | "Technical" | "Bidding" | "Strategy";
+  campaigns: CampaignMetrics[];
+  targetCpa: number;
+  targetRoas: number;
+  businessContext?: string;
+}) {
+  const { apiKey, domain, campaigns, targetCpa, targetRoas, businessContext } = args;
+
+  const response = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01"
+    },
+    body: JSON.stringify({
+      model: CLAUDE_MODEL,
+      max_tokens: 650,
+      temperature: 0.1,
+      system:
+        "Ти си Senior Media Buyer sub-agent. Работиш само по даден домейн и връщаш валиден JSON масив. " +
+        "Фокус: рентабилност, спиране на money leaks, директен тон. Отговаряй само на български. " +
+        "Критично правило: ако кампанията има под 500 импресии, маркирай я като Learning и препоръчай изчакване 48 часа, без драстични промени.",
+      messages: [
+        {
+          role: "user",
+          content: JSON.stringify(
+            {
+              mode: "sub-agent-audit",
+              domain,
+              requiredOutput:
+                "Върни JSON масив от обекти: { task, impactScore, reason, platform }. max 3 обекта.",
+              context: {
+                targetCpa,
+                targetRoas,
+                businessContext: businessContext ?? "Без допълнителен контекст"
+              },
+              campaigns
+            },
+            null,
+            2
+          )
+        }
+      ]
+    })
+  });
+
+  if (!response.ok) return [];
+  const payload = (await response.json()) as ClaudeMessageResponse;
+  const text = payload.content?.find((entry) => entry.type === "text")?.text ?? "";
+  const jsonStart = text.indexOf("[");
+  const jsonEnd = text.lastIndexOf("]");
+  if (jsonStart === -1 || jsonEnd === -1) return [];
+
+  try {
+    const parsed = JSON.parse(text.slice(jsonStart, jsonEnd + 1)) as Array<{
+      task?: string;
+      impactScore?: number;
+      reason?: string;
+      platform?: string;
+    }>;
+    if (!Array.isArray(parsed)) return [];
+
+    return parsed
+      .filter((entry) => entry.task && entry.reason)
+      .map((entry) => ({
+        task: entry.task ?? "",
+        impactScore: Math.max(1, Math.min(100, Number(entry.impactScore ?? 60))),
+        reason: entry.reason ?? "",
+        platform: normalizePlatform(entry.platform)
+      }));
+  } catch {
+    return [];
+  }
+}
+
+function normalizePlatform(value?: string): "Meta" | "Google" | "Общо" {
+  if (value === "Meta" || value === "Google" || value === "Общо") return value;
+  return "Общо";
+}
+
+function dedupeActions(actions: PrioritizedAction[]) {
+  const map = new Map<string, PrioritizedAction>();
+  for (const action of actions) {
+    const key = `${action.platform}:${action.task.trim().toLowerCase()}`;
+    const existing = map.get(key);
+    if (!existing || existing.impactScore < action.impactScore) {
+      map.set(key, action);
+    }
+  }
+  return Array.from(map.values());
 }

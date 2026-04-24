@@ -1,0 +1,17 @@
+name: Monthly Usage Reset Cron
+
+on:
+  schedule:
+    - cron: "0 3 1 * *"
+  workflow_dispatch:
+
+jobs:
+  trigger-monthly-reset:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Invoke Supabase monthly usage reset function
+        run: |
+          curl --fail-with-body -X POST "${{ secrets.SUPABASE_FUNCTION_URL }}/monthly-usage-reset" \
+            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
+            -H "Content-Type: application/json" \
+            -d "{}"

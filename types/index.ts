@@ -4,12 +4,15 @@ export type CampaignMetrics = {
   id: string;
   platform: Platform;
   campaignName: string;
+  currencyCode: string;
   spend: number;
   conversions: number;
   cpa: number;
   roas: number;
   ctr: number;
   impressions: number;
+  frequency?: number;
+  impressionShare?: number;
   targetCpa: number;
 };
 
@@ -38,8 +41,29 @@ export type MorningDigest = {
 };
 
 export type AuditInsight = {
+  campaignId?: string;
+  healthScore: number;
+  prioritizedActions: PrioritizedAction[];
+  killList: KillListItem[];
+};
+
+export type PrioritizedAction = {
+  task: string;
+  impactScore: number;
+  reason: string;
+  platform: Platform | "Общо";
+  campaignId?: string;
+  actionType?: "PAUSE" | "ACTIVATE";
+};
+
+export type KillListItem = {
   campaignId: string;
-  bullets: string[];
+  campaignName: string;
+  platform: Platform;
+  cpa: number;
+  targetCpa: number;
+  spend: number;
+  reason: string;
 };
 
 export type AdVariation = {
@@ -55,11 +79,20 @@ export type UserProfile = {
   businessName: string | null;
 };
 
+export type Profile = {
+  id: string;
+  email: string;
+  fullName: string;
+  subscriptionTier: "free" | "beta" | "pro";
+  aiRequestsCount: number;
+};
+
 export type PlatformToken = {
   id: string;
   userId: string;
   platform: Platform;
   accessToken: string;
+  adAccountId?: string | null;
   isActive: boolean;
   createdAt: string;
 };
