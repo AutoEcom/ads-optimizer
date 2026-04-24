@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import useSWR from "swr";
-import { Loader2, Sparkles } from "lucide-react";
+import { BadgeCheck, Crosshair, Loader2, Radar, Search, ShieldAlert, Sparkles, Target } from "lucide-react";
 
 import { TypewriterInsight } from "@/components/ai/typewriter-insight";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -31,7 +31,7 @@ import { useToast } from "@/hooks/use-toast";
 import { fetchAdsPlatformData } from "@/lib/client-ads";
 import { formatCurrency } from "@/lib/utils";
 import { executeCampaignAction, runDeepAudit, runHealthAudit } from "@/services/ai-service";
-import { AuditInsight, CampaignMetrics } from "@/types";
+import { AuditInsight, CampaignMetrics, SkillType } from "@/types";
 
 export default function AuditPage() {
   const [healthAudit, setHealthAudit] = useState<AuditInsight | null>(null);
@@ -123,6 +123,9 @@ export default function AuditPage() {
   const killCampaigns = (healthAudit?.killList ?? [])
     .map((item) => allCampaigns.find((campaign) => campaign.id === item.campaignId))
     .filter((campaign): campaign is CampaignMetrics => Boolean(campaign));
+  const activatedSkillTypes = Array.from(
+    new Set((healthAudit?.prioritizedActions ?? []).map((action) => action.type).filter(Boolean))
+  ) as SkillType[];
 
   return (
     <main className="space-y-4">
@@ -142,13 +145,49 @@ export default function AuditPage() {
               </AlertDescription>
             </Alert>
           ) : null}
+          {activatedSkillTypes.length > 0 ? (
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-teal-200">Активирани AI Skills</p>
+              <div className="flex flex-wrap gap-2">
+                {activatedSkillTypes.map((skillType) => {
+                  const skill = SKILL_BADGE_MAP[skillType];
+                  const Icon = skill.icon;
+                  return (
+                    <span
+                      key={skillType}
+                      className="inline-flex items-center gap-1 rounded-full border border-teal-400/30 bg-teal-500/10 px-3 py-1 text-xs text-teal-200 shadow-[0_0_14px_rgba(45,212,191,0.25)]"
+                    >
+                      <Icon className="h-3.5 w-3.5" />
+                      {skill.label}
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
           {(healthAudit?.prioritizedActions ?? []).map((action) => (
             <Alert key={action.task}>
               <AlertTitle>
                 [{action.platform}] Impact {action.impactScore}
               </AlertTitle>
               <AlertDescription className="flex items-start justify-between gap-3">
-                <TypewriterInsight text={`${action.task}: ${action.reason}`} />
+                <div className="space-y-2">
+                  <TypewriterInsight text={`${action.task}: ${action.reason}`} />
+                  <div className="flex flex-wrap gap-2">
+                    {action.type ? (
+                      <span className="inline-flex items-center gap-1 rounded-full border border-sky-400/30 bg-sky-400/10 px-2.5 py-1 text-xs text-sky-200">
+                        <BadgeCheck className="h-3.5 w-3.5" />
+                        {SKILL_BADGE_MAP[action.type].label}
+                      </span>
+                    ) : null}
+                    {action.isKillRule ? (
+                      <span className="inline-flex items-center gap-1 rounded-full border border-rose-400/40 bg-rose-500/10 px-2.5 py-1 text-xs text-rose-200">
+                        <ShieldAlert className="h-3.5 w-3.5" />
+                        3x Kill Rule
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
                 {action.actionType === "PAUSE" && action.campaignId ? (
                   <Button
                     size="sm"
@@ -228,6 +267,21 @@ export default function AuditPage() {
     </main>
   );
 }
+
+const SKILL_BADGE_MAP: Record<SkillType, { label: string; icon: typeof Target }> = {
+  SCALING_STRATEGY: { label: "Scaling Strategy Applied", icon: Target },
+  BUDGET_SUFFICIENCY: { label: "Budget Sufficiency Active", icon: Target },
+  CREATIVE_FATIGUE: { label: "Creative Fatigue Active", icon: Radar },
+  AD_COPY_RELEVANCE: { label: "Ad Copy Relevance Active", icon: BadgeCheck },
+  AUDIENCE_BUILDER: { label: "Audience Builder Active", icon: Crosshair },
+  AUDIENCE_SIGNALS: { label: "Audience Signals Active", icon: Crosshair },
+  EVENT_MATCH_QUALITY: { label: "Event Match Quality Active", icon: Radar },
+  NEGATIVE_KEYWORD_GUARD: { label: "Negative Keyword Guard Active", icon: ShieldAlert },
+  AUCTION_OVERLAP: { label: "Auction Overlap Active", icon: Radar },
+  BID_STRATEGY_AUDITOR: { label: "Bid Strategy Auditor Active", icon: BadgeCheck },
+  FUNNEL_ALIGNMENT: { label: "Funnel Alignment Active", icon: Target },
+  KEYWORD_MINING: { label: "Keyword Mining Active", icon: Search }
+};
 
 function CampaignTable({
   title,

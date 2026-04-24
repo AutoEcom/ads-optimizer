@@ -1,4 +1,4 @@
-import { AdVariation, AuditInsight, CampaignMetrics, PrioritizedAction } from "@/types";
+import { AdVariation, AuditInsight, CampaignMetrics, PrioritizedAction, SkillType } from "@/types";
 import { buildHeuristicActions, buildKillList, computeHealthScore } from "@/lib/audit-rules";
 
 const CLAUDE_MODEL = "claude-3-5-sonnet-20241022";
@@ -227,6 +227,32 @@ async function runSubAgentAudit(args: {
   businessContext?: string;
 }) {
   const { apiKey, domain, campaigns, targetCpa, targetRoas, businessContext } = args;
+  const domainPlaybook: Record<typeof domain, string> = {
+    Budget:
+      "Meta: приложи Scaling Roadmap (поетапно вдигане на бюджет при стабилен CPA/ROAS). " +
+      "Google: анализирай Budget Sufficiency (дали бюджетът ограничава Impression Share и конверсии). " +
+      "Използвай type: SCALING_STRATEGY или BUDGET_SUFFICIENCY.",
+    Creative:
+      "Meta: провери Creative Fatigue и hook стратегия при висока frequency/нисък CTR. " +
+      "Google: провери Ad Copy Relevance и Quality сигналите. " +
+      "Използвай type: CREATIVE_FATIGUE или AD_COPY_RELEVANCE.",
+    Audience:
+      "Meta: предложи Audience Builder идеи (LAL, interests, broad+advantage). " +
+      "Google: използвай Audience Signals за PMax/Display. " +
+      "Използвай type: AUDIENCE_BUILDER или AUDIENCE_SIGNALS.",
+    Technical:
+      "Meta: анализирай Event Match Quality и tracking quality. " +
+      "Google: приложи Negative Keyword Guard за wasted spend от нерелевантни search terms. " +
+      "Използвай type: EVENT_MATCH_QUALITY или NEGATIVE_KEYWORD_GUARD.",
+    Bidding:
+      "Meta: търси Auction Overlap/вътрешна конкуренция между ad sets. " +
+      "Google: провери Bid Strategy Auditor (tCPA/tROAS mismatch). " +
+      "Използвай type: AUCTION_OVERLAP или BID_STRATEGY_AUDITOR.",
+    Strategy:
+      "Meta: провери Funnel Alignment и предложи Audience Builder (Interest/LAL) разширения. " +
+      "Google: направи Keyword Mining от search terms и funnel fit. " +
+      "Използвай type: FUNNEL_ALIGNMENT, AUDIENCE_BUILDER или KEYWORD_MINING."
+  };
 
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -242,7 +268,8 @@ async function runSubAgentAudit(args: {
       system:
         "Ти си Senior Media Buyer sub-agent. Работиш само по даден домейн и връщаш валиден JSON масив. " +
         "Фокус: рентабилност, спиране на money leaks, директен тон. Отговаряй само на български. " +
-        "Критично правило: ако кампанията има под 500 импресии, маркирай я като Learning и препоръчай изчакване 48 часа, без драстични промени.",
+        "Критично правило: ако кампанията има под 500 импресии, маркирай я като Learning и препоръчай изчакване 48 часа, без драстични промени. " +
+        "Добавяй actionType='PAUSE' и isKillRule=true само при ясен 3x Kill Rule риск.",
       messages: [
         {
           role: "user",
@@ -250,8 +277,9 @@ async function runSubAgentAudit(args: {
             {
               mode: "sub-agent-audit",
               domain,
+              domainPlaybook: domainPlaybook[domain],
               requiredOutput:
-                "Върни JSON масив от обекти: { task, impactScore, reason, platform }. max 3 обекта.",
+                "Върни JSON масив max 3 обекта: { task, impactScore, reason, platform, type, campaignId?, actionType?, isKillRule? }.",
               context: {
                 targetCpa,
                 targetRoas,
@@ -280,6 +308,10 @@ async function runSubAgentAudit(args: {
       impactScore?: number;
       reason?: string;
       platform?: string;
+      type?: string;
+      campaignId?: string;
+      actionType?: "PAUSE" | "ACTIVATE";
+      isKillRule?: boolean;
     }>;
     if (!Array.isArray(parsed)) return [];
 
@@ -289,7 +321,11 @@ async function runSubAgentAudit(args: {
         task: entry.task ?? "",
         impactScore: Math.max(1, Math.min(100, Number(entry.impactScore ?? 60))),
         reason: entry.reason ?? "",
-        platform: normalizePlatform(entry.platform)
+        platform: normalizePlatform(entry.platform),
+        type: normalizeSkillType(entry.type),
+        campaignId: entry.campaignId,
+        actionType: entry.actionType,
+        isKillRule: Boolean(entry.isKillRule)
       }));
   } catch {
     return [];
@@ -299,6 +335,25 @@ async function runSubAgentAudit(args: {
 function normalizePlatform(value?: string): "Meta" | "Google" | "Общо" {
   if (value === "Meta" || value === "Google" || value === "Общо") return value;
   return "Общо";
+}
+
+function normalizeSkillType(value?: string): SkillType | undefined {
+  const allowed: SkillType[] = [
+    "SCALING_STRATEGY",
+    "BUDGET_SUFFICIENCY",
+    "CREATIVE_FATIGUE",
+    "AD_COPY_RELEVANCE",
+    "AUDIENCE_BUILDER",
+    "AUDIENCE_SIGNALS",
+    "EVENT_MATCH_QUALITY",
+    "NEGATIVE_KEYWORD_GUARD",
+    "AUCTION_OVERLAP",
+    "BID_STRATEGY_AUDITOR",
+    "FUNNEL_ALIGNMENT",
+    "KEYWORD_MINING"
+  ];
+  if (!value) return undefined;
+  return allowed.includes(value as SkillType) ? (value as SkillType) : undefined;
 }
 
 function dedupeActions(actions: PrioritizedAction[]) {

@@ -164,6 +164,7 @@ export function DashboardPage() {
     if (allCampaigns.length > 0) return "Live данни активни";
     return "Очаква свързване";
   }, [metaTokenExpired, googleTokenExpired, allCampaigns.length]);
+  const isConnectionHealthy = !metaTokenExpired && !googleTokenExpired && allCampaigns.length > 0;
 
   useEffect(() => {
     async function loadDigest() {
@@ -319,7 +320,17 @@ export function DashboardPage() {
             <Button className="w-full" variant="outline" onClick={() => router.push("/settings" as Route)}>
               Свържи Google Ads
             </Button>
-            <p className="text-sm text-muted-foreground">Статус: {connectionStatus}</p>
+            <p className="inline-flex items-center gap-2 text-sm text-muted-foreground">
+              <span
+                className={`h-2.5 w-2.5 rounded-full ${
+                  isConnectionHealthy
+                    ? "bg-emerald-400 shadow-[0_0_10px_rgba(16,185,129,0.9)]"
+                    : "bg-rose-400 shadow-[0_0_10px_rgba(244,63,94,0.85)]"
+                }`}
+                aria-hidden="true"
+              />
+              Статус: {connectionStatus}
+            </p>
           </CardContent>
         </Card>
       </section>

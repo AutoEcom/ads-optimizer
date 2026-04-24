@@ -13,6 +13,7 @@ export type CampaignMetrics = {
   impressions: number;
   frequency?: number;
   impressionShare?: number;
+  searchTerms?: string[];
   targetCpa: number;
 };
 
@@ -54,7 +55,23 @@ export type PrioritizedAction = {
   platform: Platform | "Общо";
   campaignId?: string;
   actionType?: "PAUSE" | "ACTIVATE";
+  type?: SkillType;
+  isKillRule?: boolean;
 };
+
+export type SkillType =
+  | "SCALING_STRATEGY"
+  | "BUDGET_SUFFICIENCY"
+  | "CREATIVE_FATIGUE"
+  | "AD_COPY_RELEVANCE"
+  | "AUDIENCE_BUILDER"
+  | "AUDIENCE_SIGNALS"
+  | "EVENT_MATCH_QUALITY"
+  | "NEGATIVE_KEYWORD_GUARD"
+  | "AUCTION_OVERLAP"
+  | "BID_STRATEGY_AUDITOR"
+  | "FUNNEL_ALIGNMENT"
+  | "KEYWORD_MINING";
 
 export type KillListItem = {
   campaignId: string;

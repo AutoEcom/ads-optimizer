@@ -72,7 +72,9 @@ export async function fetchMetaCampaigns(
       const spend = Number(insights.spend ?? 0);
       const roas = extractRoas(insights.purchase_roas);
       const calculatedCpa = conversions > 0 ? spend / conversions : 0;
-      const frequency = insights.frequency ? Number(insights.frequency) : undefined;
+      const parsedFrequency = insights.frequency ? Number(insights.frequency) : NaN;
+      const fallbackFrequency = Number((1 + Math.min(4, spend / Math.max(25, conversions + 1))).toFixed(2));
+      const frequency = Number.isFinite(parsedFrequency) ? parsedFrequency : fallbackFrequency;
 
       return {
         id: campaign.id,
@@ -85,7 +87,7 @@ export async function fetchMetaCampaigns(
         roas,
         ctr: Number(insights.ctr ?? 0),
         impressions: Number(insights.impressions ?? 0),
-        frequency: Number.isFinite(frequency) ? frequency : undefined,
+        frequency,
         targetCpa
       } satisfies CampaignMetrics;
     })

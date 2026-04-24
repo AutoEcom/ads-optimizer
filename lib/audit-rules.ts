@@ -33,7 +33,8 @@ export function buildHeuristicActions(
           2
         )}). Липсва стабилен learning сигнал.`,
         platform: campaign.platform,
-        campaignId: campaign.id
+        campaignId: campaign.id,
+        type: "BUDGET_SUFFICIENCY"
       });
     }
 
@@ -46,7 +47,9 @@ export function buildHeuristicActions(
         )}. Нужна е незабавна пауза за ограничаване на загубите.`,
         platform: campaign.platform,
         campaignId: campaign.id,
-        actionType: "PAUSE"
+        actionType: "PAUSE",
+        type: "SCALING_STRATEGY",
+        isKillRule: true
       });
     }
 
@@ -58,7 +61,8 @@ export function buildHeuristicActions(
           2
         )} > 3.0: сигнал за creative fatigue и спад в CTR.`,
         platform: "Meta",
-        campaignId: campaign.id
+        campaignId: campaign.id,
+        type: "CREATIVE_FATIGUE"
       });
     }
 
@@ -74,7 +78,8 @@ export function buildHeuristicActions(
           1
         )}% е нисък; губиш търсене заради бюджет или bidding ограничения.`,
         platform: "Google",
-        campaignId: campaign.id
+        campaignId: campaign.id,
+        type: "AUDIENCE_SIGNALS"
       });
     }
   }

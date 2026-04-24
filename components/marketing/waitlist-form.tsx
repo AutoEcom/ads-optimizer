@@ -52,7 +52,7 @@ export function WaitlistForm() {
           required
         />
         <Button type="submit" disabled={loading}>
-          {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Влез в списъка на чакащите"}
+          {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Влез в списъка на чакащите за Beta достъп"}
         </Button>
       </div>
       {success ? (

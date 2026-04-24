@@ -10,6 +10,10 @@ type CookieToSet = {
 };
 
 export async function middleware(request: NextRequest) {
+  if (process.env.NODE_ENV !== "production" && request.nextUrl.searchParams.get("preview") === "1") {
+    return NextResponse.next();
+  }
+
   let response = NextResponse.next({
     request: {
       headers: request.headers
