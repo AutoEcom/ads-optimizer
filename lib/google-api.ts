@@ -29,7 +29,8 @@ export async function fetchGoogleCampaigns(
 ): Promise<{ campaigns: CampaignMetrics[]; currencyCode: string }> {
   const developerToken = process.env.GOOGLE_ADS_DEVELOPER_TOKEN;
   if (!developerToken) {
-    throw new Error("Липсва GOOGLE_ADS_DEVELOPER_TOKEN.");
+    console.warn("[Google Ads] Липсва GOOGLE_ADS_DEVELOPER_TOKEN. Връщаме празни кампании.");
+    return { campaigns: [], currencyCode: "EUR" };
   }
 
   const normalizedCustomerId = customerId.replace(/-/g, "");

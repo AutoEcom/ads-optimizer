@@ -19,15 +19,17 @@ type MetaInsights = {
   purchase_roas?: Array<{ value: string }>;
 };
 
+const META_API_VERSION = process.env.META_MARKETING_API_VERSION ?? "v21.0";
+
 export async function fetchMetaCampaigns(
   accessToken: string,
   adAccountId: string,
   targetCpa: number
 ): Promise<{ campaigns: CampaignMetrics[]; currencyCode: string }> {
   const normalizedAccount = adAccountId.startsWith("act_") ? adAccountId : `act_${adAccountId}`;
-  const baseUrl = `https://graph.facebook.com/v19.0/${normalizedAccount}/campaigns`;
+  const baseUrl = `https://graph.facebook.com/${META_API_VERSION}/${normalizedAccount}/campaigns`;
 
-  const accountUrl = new URL(`https://graph.facebook.com/v19.0/${normalizedAccount}`);
+  const accountUrl = new URL(`https://graph.facebook.com/${META_API_VERSION}/${normalizedAccount}`);
   accountUrl.searchParams.set("fields", "currency");
   accountUrl.searchParams.set("access_token", accessToken);
 
@@ -118,7 +120,7 @@ export async function updateCampaignStatus(
   campaignId: string,
   status: "PAUSED" | "ACTIVE"
 ) {
-  const updateUrl = new URL(`https://graph.facebook.com/v19.0/${campaignId}`);
+  const updateUrl = new URL(`https://graph.facebook.com/${META_API_VERSION}/${campaignId}`);
   const payload = new URLSearchParams();
   payload.set("status", status);
   payload.set("access_token", accessToken);
@@ -142,7 +144,7 @@ export async function updateCampaignStatus(
 }
 
 async function fetchCampaignInsights(campaignId: string, accessToken: string): Promise<MetaInsights> {
-  const insightsUrl = new URL(`https://graph.facebook.com/v19.0/${campaignId}/insights`);
+  const insightsUrl = new URL(`https://graph.facebook.com/${META_API_VERSION}/${campaignId}/insights`);
   insightsUrl.searchParams.set(
     "fields",
     "spend,clicks,impressions,actions,action_values,cpc,ctr,frequency,purchase_roas"

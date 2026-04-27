@@ -56,7 +56,7 @@ export function WaitlistForm() {
         </Button>
       </div>
       {success ? (
-        <p className="mt-2 text-sm text-teal-300">Успешно! Ще получиш ранен достъп веднага щом отворим beta.</p>
+        <p className="mt-2 text-sm text-teal-300">Благодарим ви! Ще се свържем с вас скоро.</p>
       ) : null}
       {error ? <p className="mt-2 text-sm text-rose-400">{error}</p> : null}
     </form>

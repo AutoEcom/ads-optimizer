@@ -54,7 +54,11 @@ export function LandingPage() {
             <CardTitle className="text-base">Live Preview: Health Score</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="mx-auto flex h-52 w-52 items-center justify-center rounded-full bg-slate-950/60 p-2 shadow-[0_0_44px_rgba(16,185,129,0.42)]">
+            <motion.div
+              className="mx-auto flex h-52 w-52 items-center justify-center rounded-full bg-slate-950/60 p-2 shadow-[0_0_44px_rgba(16,185,129,0.42)]"
+              animate={{ boxShadow: ["0 0 28px rgba(16,185,129,0.32)", "0 0 52px rgba(16,185,129,0.58)", "0 0 28px rgba(16,185,129,0.32)"] }}
+              transition={{ duration: 2.4, repeat: Infinity, ease: "easeInOut" }}
+            >
               <div
                 className="relative h-full w-full rounded-full"
                 style={{
@@ -69,7 +73,7 @@ export function LandingPage() {
                   </div>
                 </div>
               </div>
-            </div>
+            </motion.div>
             <div className="rounded-lg border border-rose-400/30 bg-rose-500/10 p-3">
               <p className="text-sm font-medium text-rose-200">3x Kill Rule защита</p>
               <p className="text-xs text-muted-foreground">
@@ -122,19 +126,38 @@ export function LandingPage() {
         </div>
 
         <h2 className="pt-2 text-2xl font-semibold">6-Agent Orchestration</h2>
-        <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-          {AGENTS.map((agent, index) => (
+        <motion.div
+          className="grid gap-3 md:grid-cols-2 lg:grid-cols-3"
+          initial="hidden"
+          whileInView="visible"
+          viewport={{ once: true, amount: 0.25 }}
+          variants={{
+            hidden: {},
+            visible: {
+              transition: {
+                staggerChildren: 0.12,
+                delayChildren: 0.08
+              }
+            }
+          }}
+        >
+          {AGENTS.map((agent) => (
             <motion.div
               key={agent.title}
-              initial={{ opacity: 0, y: 22 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true, amount: 0.3 }}
-              transition={{ duration: 0.45, delay: index * 0.08 }}
+              variants={{
+                hidden: { opacity: 0, y: 26 },
+                visible: { opacity: 1, y: 0 }
+              }}
+              transition={{ duration: 0.5, ease: "easeOut" }}
             >
-              <FeatureCard icon={<agent.icon className="h-5 w-5 text-teal-300" />} title={agent.title} description={agent.description} />
+              <FeatureCard
+                icon={<agent.icon className="h-5 w-5 text-teal-300" />}
+                title={agent.title}
+                description={agent.description}
+              />
             </motion.div>
           ))}
-        </div>
+        </motion.div>
       </section>
     </main>
   );

@@ -10,7 +10,14 @@ type CookieToSet = {
 };
 
 export async function middleware(request: NextRequest) {
-  if (process.env.NODE_ENV !== "production" && request.nextUrl.searchParams.get("preview") === "1") {
+  const isLocalPreviewRequest =
+    request.nextUrl.hostname === "localhost" || request.nextUrl.hostname === "127.0.0.1";
+  const canBypassInDev =
+    process.env.NODE_ENV !== "production" &&
+    isLocalPreviewRequest &&
+    request.nextUrl.searchParams.get("preview") === "1";
+
+  if (canBypassInDev) {
     return NextResponse.next();
   }
 
