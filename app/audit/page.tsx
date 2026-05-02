@@ -216,7 +216,7 @@ export default function AuditPage() {
         </CardContent>
       </Card>
 
-      <section className="grid gap-4 lg:grid-cols-2">
+      <section className="grid gap-4">
         <CampaignTable
           title="Meta кампании"
           rows={metaData?.campaigns ?? []}

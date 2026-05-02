@@ -135,13 +135,22 @@ export async function generateAdVariations(
   const response = await fetch("/api/ai/generate", {
     method: "POST",
     headers: {
-      "Content-Type": "application/json"
+      "Content-Type": "application/json",
+      "Cache-Control": "no-cache"
     },
-    body: JSON.stringify({ productDescription })
+    body: JSON.stringify({ productDescription, _nonce: Math.random() }),
+    cache: "no-store"
   });
 
   if (!response.ok) {
-    throw new Error("Неуспешно генериране на рекламни варианти.");
+    let detail = `HTTP ${response.status}`;
+    try {
+      const j = (await response.json()) as { error?: string };
+      if (j?.error && typeof j.error === "string") detail = j.error;
+    } catch {
+      /* игнорираме */
+    }
+    throw new Error(detail || "Неуспешно генериране на рекламни варианти.");
   }
 
   return (await response.json()) as AdVariation[];

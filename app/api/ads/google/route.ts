@@ -14,15 +14,8 @@ export async function GET() {
       return NextResponse.json({ error: "Няма активна сесия." }, { status: 401 });
     }
 
-    const { data: tokenRow, error: tokenError } = await supabase
-      .from("ad_platform_tokens")
-      .select("access_token,ad_account_id")
-      .eq("user_id", user.id)
-      .eq("platform", "Google")
-      .eq("is_active", true)
-      .maybeSingle();
-
-    if (tokenError || !tokenRow?.access_token || !tokenRow?.ad_account_id) {
+    const tokenResult = await getTokenRowWithCompat(supabase, user.id, "Google");
+    if (tokenResult.error || !tokenResult.accessToken || !tokenResult.accountId) {
       return NextResponse.json(
         { error: "Моля, въведете валиден Google Token в настройките." },
         { status: 400 }
@@ -37,8 +30,8 @@ export async function GET() {
 
     const targetCpa = Number(profile?.target_cpa ?? 20);
     const result = await fetchGoogleCampaigns(
-      tokenRow.access_token,
-      tokenRow.ad_account_id,
+      tokenResult.accessToken,
+      tokenResult.accountId,
       targetCpa
     );
 
@@ -55,4 +48,45 @@ export async function GET() {
       { status: 400 }
     );
   }
+}
+
+async function getTokenRowWithCompat(
+  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
+  userId: string,
+  platform: "Meta" | "Google"
+) {
+  const primary = await supabase
+    .from("ad_platform_tokens")
+    .select("access_token,ad_account_id")
+    .eq("user_id", userId)
+    .eq("platform", platform)
+    .eq("is_active", true)
+    .maybeSingle();
+
+  if (!isMissingAdAccountColumnError(primary.error)) {
+    return {
+      accessToken: primary.data?.access_token ?? null,
+      accountId: primary.data?.ad_account_id ?? null,
+      error: primary.error
+    };
+  }
+
+  const legacy = await supabase
+    .from("ad_platform_tokens")
+    .select("access_token,account_id")
+    .eq("user_id", userId)
+    .eq("platform", platform)
+    .eq("is_active", true)
+    .maybeSingle();
+
+  return {
+    accessToken: legacy.data?.access_token ?? null,
+    accountId: legacy.data?.account_id ?? null,
+    error: legacy.error
+  };
+}
+
+function isMissingAdAccountColumnError(error: { message?: string } | null) {
+  const message = error?.message ?? "";
+  return message.includes("ad_account_id") && message.includes("schema cache");
 }

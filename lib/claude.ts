@@ -1,11 +1,91 @@
 import { AdVariation, AuditInsight, CampaignMetrics, PrioritizedAction, SkillType } from "@/types";
 import { buildHeuristicActions, buildKillList, computeHealthScore } from "@/lib/audit-rules";
 
-const CLAUDE_MODEL = "claude-3-5-sonnet-20241022";
+/** Аудит / sub-agents — най-мощният слой (според Workbench). Алтернатива: claude-haiku-4-5-20251001 за скорост. */
+const CLAUDE_MODEL = "claude-opus-4-7";
+
+/** Генератор реклами — Sonnet 4.6 („новият Sonnet“). */
+const CLAUDE_CREATIVE_MODEL = "claude-sonnet-4-6";
 
 type ClaudeMessageResponse = {
   content?: Array<{ type: string; text?: string }>;
 };
+
+/** Идентичен на официалния Messages endpoint (без query). */
+const ANTHROPIC_MESSAGES_BASE_URL = "https://api.anthropic.com/v1/messages";
+
+function anthropicMessagesUrl(): string {
+  return ANTHROPIC_MESSAGES_BASE_URL;
+}
+
+/** От мрежови променливи: trim и премахва единични/двойни кавички около целия стринг в .env. */
+function anthropicApiKeyFromEnv(): string {
+  let k = process.env.ANTHROPIC_API_KEY ?? "";
+  k = k.trim();
+  if ((k.startsWith('"') && k.endsWith('"')) || (k.startsWith("'") && k.endsWith("'"))) {
+    k = k.slice(1, -1).trim();
+  }
+  return k;
+}
+
+/** Фиксирана версия на HTTP API към Claude (Anthropic документация). */
+const ANTHROPIC_VERSION_HEADER = "2023-06-01";
+
+function anthropicJsonHeaders(apiKey: string): Record<string, string> {
+  const key = apiKey.trim();
+  return {
+    "Content-Type": "application/json",
+    "x-api-key": key,
+    "anthropic-version": ANTHROPIC_VERSION_HEADER,
+    "Cache-Control": "no-cache, no-store, must-revalidate",
+    Pragma: "no-cache",
+    Expires: "0"
+  };
+}
+
+function anthropicOutboundHeadersSafeForLog(headers: Record<string, string>): Record<string, string> {
+  const apiKeySent = headers["x-api-key"] ?? "";
+  const masked =
+    apiKeySent.length === 0
+      ? "(empty)"
+      : apiKeySent.length <= 14
+        ? `(only ${apiKeySent.length} chars — check .env)`
+        : `${apiKeySent.slice(0, 12)}…${apiKeySent.slice(-4)} (len=${apiKeySent.length})`;
+  return { ...headers, "x-api-key": masked };
+}
+
+function shouldLogAnthropicTransport(): boolean {
+  return process.env.NODE_ENV !== "production" || process.env.ADS_DEBUG_ANTHROPIC === "1";
+}
+
+/** Пълният URL и хедъри (ключът замаскиран) точно преди fetch. */
+function logAnthropicOutbound(context: string, url: string, headers: Record<string, string>): void {
+  const baseNoQuery = url.split("?")[0];
+  const alwaysForCreative =
+    context === "createAdVariations" ||
+    context.startsWith("createAdVariations:") ||
+    process.env.ADS_LOG_ANTHROPIC_TRANSPORT === "1";
+  if (!alwaysForCreative && !shouldLogAnthropicTransport()) return;
+
+  console.log(
+    "[Anthropic OUTBOUND]",
+    JSON.stringify(
+      {
+        context,
+        fullUrl: url,
+        pathnameCheck:
+          baseNoQuery === ANTHROPIC_MESSAGES_BASE_URL
+            ? "OK"
+            : `WRONG (got ${baseNoQuery}, expected ${ANTHROPIC_MESSAGES_BASE_URL})`,
+        headersSent: anthropicOutboundHeadersSafeForLog(headers),
+        anthropic_version_expected: ANTHROPIC_VERSION_HEADER,
+        anthropic_version_sent: headers["anthropic-version"]
+      },
+      null,
+      2
+    )
+  );
+}
 
 export async function createCampaignAudit(args: {
   campaign: CampaignMetrics;
@@ -28,7 +108,7 @@ export async function createCampaignAudit(args: {
       : `Следваща стъпка: Пренасочи 20% бюджет към вариант с цел ROAS ${targetRoas.toFixed(1)}+.`
   ];
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = anthropicApiKeyFromEnv();
   if (!apiKey) {
     return fallback;
   }
@@ -51,20 +131,21 @@ export async function createCampaignAudit(args: {
   );
 
   try {
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
+    const url = anthropicMessagesUrl();
+    const headers = anthropicJsonHeaders(apiKey);
+    logAnthropicOutbound("createCampaignAudit", url, headers);
+
+    const response = await fetch(url, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01"
-      },
+      headers,
       body: JSON.stringify({
         model: CLAUDE_MODEL,
         max_tokens: 700,
         temperature: 0.2,
         system: systemPrompt,
         messages: [{ role: "user", content: userPrompt }]
-      })
+      }),
+      cache: "no-store"
     });
 
     if (!response.ok) {
@@ -85,75 +166,326 @@ export async function createCampaignAudit(args: {
   }
 }
 
+const URL_IN_INPUT_REGEX = /\bhttps?:\/\/[^\s<>"']+/i;
+
+const GENERATE_ADS_FEW_SHOT_BLOCK =
+  "\n### ПРИМЕР ЗА ИЗХОД (НЕ повтаряш входа — това е главният режим):\n" +
+  "EXAMPLE OF WHAT TO AVOID:\n" +
+  'Input: "Колаген за стави"\n' +
+  'Output headline idea: "Още ли те боли от Колаген за стави?" (ГРЕШНО — преписване на входа)\n' +
+  "\n" +
+  "EXAMPLE OF WHAT TO DO:\n" +
+  'Input: "Колаген за стави"\n' +
+  'Output headline idea: "Върни се към активния живот без болка още днес." (ПРАВИЛНО — креативна интерпретация на ползата)\n';
+
+const GENERATE_ADS_SYSTEM_PROMPT =
+  "Ти си световноизвестен Direct Response Copywriter, специализиран в Meta и Google Ads. Твоята задача е да превърнеш сурови технически данни в магнетично рекламно копи.\n" +
+  GENERATE_ADS_FEW_SHOT_BLOCK +
+  "\n" +
+  "### СТРИКТНИ ЗАБРАНИ (CRITICAL):\n" +
+  '1. НИКОГА не включвай думи като "Входни бележки", "Контекст", "Продукт", "Платформа" или "Оферта" в резултата.\n' +
+  "2. НИКОГА не преписвай суровия текст от входа. Използвай го само за информация.\n" +
+  '3. НИКОГА не започвай изреченията с "От клиента:" или подобни фрази.\n' +
+  "\n" +
+  "### ТВОЯТ СТИЛ:\n" +
+  '- Пиши директно на "Ти". \n' +
+  "- Използвай емоционални спусъци: болка, желание, страх от пропуснати ползи (FOMO).\n" +
+  '- Фокусирай се върху РЕЗУЛТАТА, а не върху съставките (напр. не "Колаген 11000мг", а "Забрави за болката в ставите и върни свободата на движенията си").\n' +
+  "\n" +
+  "### СТРУКТУРА НА ВАРЯНТИТЕ:\n" +
+  "Вариант 1 (Pain): Започни с въпрос за болката/проблема.\n" +
+  "Вариант 2 (Benefit): Започни с обещание за трансформация.\n" +
+  "Вариант 3 (Urgency): Започни със силен кука (hook) и ограничено количество/време.\n" +
+  "\n" +
+  "### ФОРМАТ НА ИЗХОДА (JSON):\n" +
+  "Върни обекта точно в този формат:\n" +
+  "{\n" +
+  '  "variants": [\n' +
+  '    { "headline": "...", "body": "...", "hook": "..." },\n' +
+  '    { "headline": "...", "body": "...", "hook": "..." },\n' +
+  '    { "headline": "...", "body": "...", "hook": "..." }\n' +
+  "  ]\n" +
+  "}";
+
+/** Single-turn only: задача ясно отделена от DATA, за да не се ползва user като copy-paste. */
+function buildGenerateAdsStructuredUserMessage(dataPlain: string): string {
+  const data = collapseWhitespace(dataPlain).slice(0, 12_000);
+  return [
+    "TASK: Write exactly 3 creative advertising variants based on the information below.",
+    "RULES: Do NOT repeat or lightly repurpose the DATA as finished ad copy.",
+    "Do NOT use forbidden meta scaffolding (see system prompt). Interpret and sell the benefit.",
+    "All headline, body, and hook strings in the JSON must be in Bulgarian.",
+    "OUTPUT: Respond with JSON ONLY, matching the system schema ({ variants: [...] }).",
+    "",
+    "DATA:",
+    data || "(no structured notes — infer a plausible wellness-style angle in Bulgarian)."
+  ].join("\n");
+}
+
+/**
+ * Strip technical wrappers before Claude user message (`createAdVariations` input pipeline).
+ */
+function sanitizeCreativeBriefForClaude(raw: string): string {
+  let s = raw.replace(/\s*---+[\s-]*\s*/g, "\n").trim();
+  const lines = s.split(/\n/).map((line) => {
+    const t = line.trim();
+    return t
+      .replace(
+        /^(Входни\s+бележки|Input|INPUT|От\s+клиента|CONTEXT|Контекст|Допълнително\s+от\s+страницата|Подадена\s+информация|Информация\s+за\s+писане)\s*[:\.]?\s*/i,
+        ""
+      )
+      .trim();
+  });
+  s = collapseWhitespace(lines.filter(Boolean).join("\n"));
+  return s.trim();
+}
+
+function buildCreativeBriefForApi(rawInput: string, fetchedPagePlain: string | null): string {
+  const parts: string[] = [];
+  let userBlock = rawInput.trim();
+  if (fetchedPagePlain && URL_IN_INPUT_REGEX.test(userBlock)) {
+    userBlock = userBlock.replace(URL_IN_INPUT_REGEX, " ").trim();
+    userBlock = collapseWhitespace(userBlock);
+  }
+  if (userBlock) parts.push(userBlock);
+  if (fetchedPagePlain?.trim()) parts.push(collapseWhitespace(fetchedPagePlain));
+  return sanitizeCreativeBriefForClaude(parts.filter(Boolean).join("\n\n"));
+}
+
+/** Strips wrappers like Input:/От клиента: before calling Claude (`sanitizeCreativeBriefForClaude`). */
 export async function createAdVariations(productDescription: string): Promise<AdVariation[]> {
-  const fallback: AdVariation[] = [
-    {
-      headline: "Спри разхищението на бюджет още днес",
-      primaryText: `Открий скритите течове в кампаниите си с AdGuard AI. ${productDescription}`,
-      hook: "Всеки изгубен лев е пропусната печалба."
-    },
-    {
-      headline: "По-нисък CPA без догадки",
-      primaryText: `Виж кои реклами изяждат резултатите и получи ясни действия за подобрение. ${productDescription}`,
-      hook: "Решения за 5 минути, не за 5 дни."
-    },
-    {
-      headline: "Дай шанс на работещите криейтиви",
-      primaryText: `Превърни слабите кампании в печеливши с AI одити и нови послания. ${productDescription}`,
-      hook: "Твоята следваща печеливша реклама започва тук."
-    }
-  ];
+  const rawInput = productDescription.trim();
+  const urlContext =
+    typeof rawInput === "string" && rawInput.length > 0 ? await tryFetchCreativePageContext(rawInput) : null;
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const creativeUserPayload = buildCreativeBriefForApi(rawInput, urlContext?.plainProse ?? null);
+
+  const apiKey = anthropicApiKeyFromEnv();
   if (!apiKey) {
-    return fallback;
+    throw new Error("Липсва ANTHROPIC_API_KEY — не мога да извикам Claude.");
   }
 
-  const systemPrompt =
-    "Ти си Senior Direct Response Copywriter за Meta/Google Ads. " +
-    "Върни валиден JSON масив с точно 3 обекта {headline, primaryText, hook} на български.";
+  const dataForModel =
+    creativeUserPayload.trim() ||
+    "Няма въведени данни за конкретна ниша. Генерирай 3 силни Direct Response примера на български за активен здравословен начин на живот като временен запълващ текст.";
 
+  /** Единствен user turn — без chat history към Messages API. */
+  const finalUserMessage = buildGenerateAdsStructuredUserMessage(dataForModel);
+
+  const anthropicCreativeRequestBody = {
+    model: CLAUDE_CREATIVE_MODEL,
+    max_tokens: 1400,
+    temperature: 0.8,
+    system: GENERATE_ADS_SYSTEM_PROMPT,
+    messages: [{ role: "user" as const, content: finalUserMessage }]
+  };
+
+  if (process.env.NODE_ENV !== "production" || process.env.ADS_DEBUG_ANTHROPIC === "1") {
+    console.log("FINAL PROMPT SENT TO CLAUDE:", JSON.stringify(anthropicCreativeRequestBody, null, 2));
+  }
+
+  let response: Response;
   try {
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
+    const url = anthropicMessagesUrl();
+    const headers = anthropicJsonHeaders(apiKey);
+    logAnthropicOutbound("createAdVariations", url, headers);
+
+    response = await fetch(url, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01"
-      },
-      body: JSON.stringify({
-        model: CLAUDE_MODEL,
-        max_tokens: 900,
-        temperature: 0.6,
-        system: systemPrompt,
-        messages: [
-          {
-            role: "user",
-            content: `Продуктово описание: ${productDescription}`
-          }
-        ]
-      })
+      headers,
+      body: JSON.stringify(anthropicCreativeRequestBody),
+      cache: "no-store"
     });
-
-    if (!response.ok) return fallback;
-
-    const payload = (await response.json()) as ClaudeMessageResponse;
-    const text = payload.content?.find((entry) => entry.type === "text")?.text ?? "";
-    const jsonStart = text.indexOf("[");
-    const jsonEnd = text.lastIndexOf("]");
-    if (jsonStart === -1 || jsonEnd === -1) return fallback;
-
-    const parsed = JSON.parse(text.slice(jsonStart, jsonEnd + 1)) as AdVariation[];
-    if (!Array.isArray(parsed) || parsed.length !== 3) return fallback;
-
-    return parsed.map((item) => ({
-      headline: item.headline ?? "",
-      primaryText: item.primaryText ?? "",
-      hook: item.hook ?? ""
-    }));
-  } catch {
-    return fallback;
+  } catch (err) {
+    throw new Error(
+      `Неуспешна мрежова заявка към Anthropic: ${err instanceof Error ? err.message : String(err)}`
+    );
   }
+
+  if (!response.ok) {
+    const errBody = await response.text().catch(() => "");
+    if (process.env.NODE_ENV !== "production" || process.env.ADS_DEBUG_ANTHROPIC === "1") {
+      console.warn("[createAdVariations] Anthropic HTTP error:", response.status, errBody.slice(0, 800));
+    }
+    throw new Error(
+      `Anthropic върна ${response.status}. ${errBody.slice(0, 400)}`.trim()
+    );
+  }
+
+  let payload: ClaudeMessageResponse;
+  try {
+    payload = (await response.json()) as ClaudeMessageResponse;
+  } catch (err) {
+    throw new Error(`Невалиден отговор JSON от Anthropic: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  const text = payload.content?.find((entry) => entry.type === "text")?.text ?? "";
+  let parsed: unknown;
+  try {
+    parsed = extractAdVariantsPayload(text);
+  } catch (err) {
+    throw new Error(`Непарсируем AI изход за реклами: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  const validated = sanitizeAdVariations(parsed);
+  if (!validated || validated.length !== 3) {
+    throw new Error("Отговорът няма 3 валидни variant-а headline/body/hook.");
+  }
+
+  const looksGeneric =
+    validated.some((v) => /adguard|оптимизатор|health audit|CPA без догадки/i.test(`${v.headline} ${v.primaryText}`)) ||
+    validated.every((v) => v.primaryText.length < 40);
+  if (looksGeneric) {
+    throw new Error("Моделът върна твърде генерично копие — промени входа или temperature и опитай пак.");
+  }
+
+  return validated;
+}
+
+async function tryFetchCreativePageContext(
+  inputText: string
+): Promise<{ plainProse: string | null; blockedReason?: string } | null> {
+  const rawUrlMatch = inputText.match(URL_IN_INPUT_REGEX);
+  if (!rawUrlMatch) return null;
+  let urlRaw = rawUrlMatch[0].replace(/[),.;]+$/, "");
+  try {
+    const u = new URL(urlRaw);
+    if (u.protocol !== "http:" && u.protocol !== "https:") {
+      return { plainProse: null, blockedReason: "Неподдържана схема на линка" };
+    }
+    const host = u.hostname.toLowerCase();
+    if (host === "localhost" || host === "127.0.0.1" || host.endsWith(".local")) {
+      return { plainProse: null, blockedReason: "Локални линкове не се зареждат" };
+    }
+    urlRaw = u.toString();
+  } catch {
+    return null;
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12000);
+  try {
+    const res = await fetch(urlRaw, {
+      signal: controller.signal,
+      redirect: "follow",
+      headers: {
+        Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+        "User-Agent": "AdsOptimizerCreativeFetcher/1.0"
+      }
+    });
+    if (!res.ok) {
+      return { plainProse: null, blockedReason: `Страницата върна HTTP ${res.status}` };
+    }
+    const ctype = res.headers.get("content-type") ?? "";
+    if (!ctype.toLowerCase().includes("text/html")) {
+      return { plainProse: null, blockedReason: "Не е HTML страница" };
+    }
+    const truncated = scrubHtmlSnippet(await res.text()).slice(0, 380_000);
+    const ogTitle = pickHtmlMeta(truncated, "og:title");
+    const ogDesc = pickHtmlMeta(truncated, "og:description");
+    const mdDesc = pickNameMeta(truncated, "description");
+    const titleMatch = truncated.match(/<title[^>]*>([^<]{1,400})<\/title>/i);
+    const docTitle = titleMatch?.[1] ? decodeBasicHtmlEntities(titleMatch[1]).trim() : null;
+    const plain = collapseWhitespace(decodeBasicHtmlEntities(truncated.replace(/<[^>]+>/g, " ")));
+
+    const prosePieces = [docTitle ?? ogTitle, ogDesc ?? mdDesc, plain.slice(0, 3200)].filter(
+      (p): p is string => typeof p === "string" && p.length > 0
+    );
+
+    const plainProse = collapseWhitespace(prosePieces.join(" "));
+    return plainProse ? { plainProse } : { plainProse: null };
+  } catch {
+    return { plainProse: null, blockedReason: "Неуспешно зареждане на линка" };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function scrubHtmlSnippet(html: string): string {
+  return html.replace(/<script[\s\S]*?<\/script>/gi, "").replace(/<style[\s\S]*?<\/style>/gi, "");
+}
+
+function pickHtmlMeta(html: string, property: string): string | null {
+  const direct = html.match(new RegExp(`property=["']${property}["'][^>]*content=["']([^"']+)["']`, "i"));
+  if (direct?.[1]) return collapseWhitespace(decodeBasicHtmlEntities(direct[1].trim()));
+  const reverse = html.match(new RegExp(`content=["']([^"']+)["'][^>]*property=["']${property}["']`, "i"));
+  if (reverse?.[1]) return collapseWhitespace(decodeBasicHtmlEntities(reverse[1].trim()));
+  return null;
+}
+
+function pickNameMeta(html: string, nameAttr: string): string | null {
+  const direct = html.match(new RegExp(`name=["']${nameAttr}["'][^>]*content=["']([^"']+)["']`, "i"));
+  if (direct?.[1]) return collapseWhitespace(decodeBasicHtmlEntities(direct[1].trim()));
+  const reverse = html.match(new RegExp(`content=["']([^"']+)["'][^>]*name=["']${nameAttr}["']`, "i"));
+  if (reverse?.[1]) return collapseWhitespace(decodeBasicHtmlEntities(reverse[1].trim()));
+  return null;
+}
+
+function decodeBasicHtmlEntities(text: string): string {
+  return text
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
+    .replace(/&#x([\da-fA-F]+);/g, (_, h) => String.fromCharCode(parseInt(h, 16)))
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">");
+}
+
+function collapseWhitespace(s: string): string {
+  return s.replace(/\s+/g, " ").trim();
+}
+
+function unwrapJsonFence(raw: string): string {
+  let text = raw.trim();
+  const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence?.[1]) text = fence[1].trim();
+  return text;
+}
+
+/** Parses `{ "variants": [...] }` or legacy top-level array. */
+function extractAdVariantsPayload(raw: string): unknown {
+  const text = unwrapJsonFence(raw);
+  const objStart = text.indexOf("{");
+  const objEnd = text.lastIndexOf("}");
+  if (objStart !== -1 && objEnd > objStart) {
+    try {
+      const obj = JSON.parse(text.slice(objStart, objEnd + 1)) as Record<string, unknown>;
+      if (obj && Array.isArray(obj.variants)) return obj.variants;
+    } catch {
+      /* try array fallback */
+    }
+  }
+  const start = text.indexOf("[");
+  const end = text.lastIndexOf("]");
+  if (start === -1 || end <= start) throw new Error("missing variants");
+  return JSON.parse(text.slice(start, end + 1)) as unknown;
+}
+
+function sanitizeAdVariations(data: unknown): AdVariation[] | null {
+  if (!Array.isArray(data)) return null;
+  const out: AdVariation[] = [];
+  for (const row of data) {
+    if (typeof row !== "object" || row === null) continue;
+    const r = row as Record<string, unknown>;
+    const headline = String(r.headline ?? r["заглавие"] ?? "").trim();
+    const primaryText = String(r.primaryText ?? r.body ?? r["текст"] ?? r["text"] ?? "").trim();
+    const hook = String(r.hook ?? r["кука"] ?? "").trim();
+    if (!headline || !primaryText || !hook) continue;
+    out.push({ headline, primaryText, hook });
+  }
+  if (out.length < 3) return null;
+  return out.slice(0, 3).map((v) => ({
+    headline: trimForHeadline(v.headline),
+    primaryText: v.primaryText,
+    hook: v.hook
+  }));
+}
+
+function trimForHeadline(s: string, max = 72): string {
+  if (s.length <= max) return s;
+  return `${s.slice(0, max - 1).trim()}…`;
 }
 
 export async function createHealthAudit(args: {
@@ -165,7 +497,7 @@ export async function createHealthAudit(args: {
   const { campaigns, targetCpa, targetRoas, businessContext } = args;
   const killList = buildKillList(campaigns, targetCpa);
   const heuristicActions = buildHeuristicActions(campaigns, targetCpa);
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = anthropicApiKeyFromEnv();
 
   if (!apiKey) {
     return {
@@ -254,13 +586,13 @@ async function runSubAgentAudit(args: {
       "Използвай type: FUNNEL_ALIGNMENT, AUDIENCE_BUILDER или KEYWORD_MINING."
   };
 
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
+  const url = anthropicMessagesUrl();
+  const headers = anthropicJsonHeaders(apiKey);
+  logAnthropicOutbound(`runSubAgentAudit:${domain}`, url, headers);
+
+  const response = await fetch(url, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01"
-    },
+    headers,
     body: JSON.stringify({
       model: CLAUDE_MODEL,
       max_tokens: 650,
@@ -292,7 +624,8 @@ async function runSubAgentAudit(args: {
           )
         }
       ]
-    })
+    }),
+    cache: "no-store"
   });
 
   if (!response.ok) return [];

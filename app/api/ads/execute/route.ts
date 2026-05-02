@@ -25,28 +25,21 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Няма активна сесия." }, { status: 401 });
     }
 
-    const { data: tokenRow, error: tokenError } = await supabase
-      .from("ad_platform_tokens")
-      .select("access_token, ad_account_id")
-      .eq("user_id", user.id)
-      .eq("platform", body.platform)
-      .eq("is_active", true)
-      .maybeSingle();
-
-    if (tokenError || !tokenRow?.access_token || !tokenRow.ad_account_id) {
+    const tokenResult = await getTokenRowWithCompat(supabase, user.id, body.platform);
+    if (tokenResult.error || !tokenResult.accessToken || !tokenResult.accountId) {
       return NextResponse.json({ error: "Липсва валиден токен или account id." }, { status: 400 });
     }
 
     if (body.platform === "Meta") {
       await updateCampaignStatus(
-        tokenRow.access_token,
+        tokenResult.accessToken,
         body.campaignId,
         body.action === "PAUSE" ? "PAUSED" : "ACTIVE"
       );
     } else {
       await updateGoogleCampaignStatus(
-        tokenRow.access_token,
-        tokenRow.ad_account_id,
+        tokenResult.accessToken,
+        tokenResult.accountId,
         body.campaignId,
         body.action === "PAUSE" ? "PAUSED" : "ENABLED"
       );
@@ -72,4 +65,45 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ error: "Неуспешно изпълнение на действието." }, { status: 400 });
   }
+}
+
+async function getTokenRowWithCompat(
+  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
+  userId: string,
+  platform: Platform
+) {
+  const primary = await supabase
+    .from("ad_platform_tokens")
+    .select("access_token,ad_account_id")
+    .eq("user_id", userId)
+    .eq("platform", platform)
+    .eq("is_active", true)
+    .maybeSingle();
+
+  if (!isMissingAdAccountColumnError(primary.error)) {
+    return {
+      accessToken: primary.data?.access_token ?? null,
+      accountId: primary.data?.ad_account_id ?? null,
+      error: primary.error
+    };
+  }
+
+  const legacy = await supabase
+    .from("ad_platform_tokens")
+    .select("access_token,account_id")
+    .eq("user_id", userId)
+    .eq("platform", platform)
+    .eq("is_active", true)
+    .maybeSingle();
+
+  return {
+    accessToken: legacy.data?.access_token ?? null,
+    accountId: legacy.data?.account_id ?? null,
+    error: legacy.error
+  };
+}
+
+function isMissingAdAccountColumnError(error: { message?: string } | null) {
+  const message = error?.message ?? "";
+  return message.includes("ad_account_id") && message.includes("schema cache");
 }
