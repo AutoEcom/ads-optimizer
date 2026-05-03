@@ -86,6 +86,13 @@ export const morningDigest: MorningDigest = {
   topMessage: "Имаш 2 кампании с висок разход и ниска възвръщаемост."
 };
 
+/** Празен digest когато `NEXT_PUBLIC_SHOW_MOCK_DATA` е изключен и няма реални данни. */
+export const emptyMorningDigest: MorningDigest = {
+  spendYesterday: 0,
+  campaignsToFix: 0,
+  topMessage: ""
+};
+
 export function detectCriticalIssues(data: CampaignMetrics[]): CriticalIssue[] {
   return data
     .flatMap((campaign) => {

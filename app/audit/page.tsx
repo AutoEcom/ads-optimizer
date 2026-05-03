@@ -1,8 +1,19 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import useSWR from "swr";
-import { BadgeCheck, Crosshair, Loader2, Radar, Search, ShieldAlert, Sparkles, Target } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import useSWR, { useSWRConfig } from "swr";
+import Link from "next/link";
+import type { Route } from "next";
+import {
+  BadgeCheck,
+  Crosshair,
+  Loader2,
+  Radar,
+  Search,
+  ShieldAlert,
+  Sparkles,
+  Target
+} from "lucide-react";
 
 import { TypewriterInsight } from "@/components/ai/typewriter-insight";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -26,30 +37,93 @@ import {
   DialogHeader,
   DialogTitle
 } from "@/components/ui/dialog";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  GOOGLE_ADS_SWR_KEY,
+  META_ADS_SWR_KEY,
+  useAdPlatformConnection
+} from "@/hooks/use-ad-platform-connection";
 import { useToast } from "@/hooks/use-toast";
 import { fetchAdsPlatformData } from "@/lib/client-ads";
-import { formatCurrency } from "@/lib/utils";
+import { cn, formatCurrency } from "@/lib/utils";
 import { executeCampaignAction, runDeepAudit, runHealthAudit } from "@/services/ai-service";
+import { fetchAiStrategyCache } from "@/services/ai-strategy-cache-service";
+import { getCampaignsByPlatform } from "@/services/mock-data";
 import { AuditInsight, CampaignMetrics, SkillType } from "@/types";
 
+const SHOW_MOCK_DATA = process.env.NEXT_PUBLIC_SHOW_MOCK_DATA === "true";
+
 export default function AuditPage() {
+  const { toast } = useToast();
+  const { mutate } = useSWRConfig();
+
   const [healthAudit, setHealthAudit] = useState<AuditInsight | null>(null);
+  const [aiAuditUpdatedAt, setAiAuditUpdatedAt] = useState<string | null>(null);
+  const [fetchingCachedAudit, setFetchingCachedAudit] = useState(false);
   const [loadingHealth, setLoadingHealth] = useState(false);
+  const [confirmFullAuditOpen, setConfirmFullAuditOpen] = useState(false);
+
   const [auditByCampaign, setAuditByCampaign] = useState<Record<string, AuditInsight>>({});
   const [loadingCampaignId, setLoadingCampaignId] = useState<string | null>(null);
   const [pendingExecution, setPendingExecution] = useState<CampaignMetrics[] | null>(null);
   const [isExecuting, setIsExecuting] = useState(false);
   const [isPaywallOpen, setIsPaywallOpen] = useState(false);
-  const { toast } = useToast();
 
-  const { data: metaData } = useSWR("/api/ads/meta", fetchAdsPlatformData, { dedupingInterval: 30_000 });
-  const { data: googleData } = useSWR("/api/ads/google", fetchAdsPlatformData, { dedupingInterval: 30_000 });
+  const clearAuditLinkedState = useCallback(async () => {
+    setHealthAudit(null);
+    setAiAuditUpdatedAt(null);
+    setAuditByCampaign({});
+    await mutate(META_ADS_SWR_KEY, undefined, { revalidate: false });
+    await mutate(GOOGLE_ADS_SWR_KEY, undefined, { revalidate: false });
+  }, [mutate]);
 
-  const allCampaigns = useMemo(
-    () => [...(metaData?.campaigns ?? []), ...(googleData?.campaigns ?? [])],
-    [metaData, googleData]
-  );
+  const { linkedAccountStatus, hasLinkedAdAccounts } = useAdPlatformConnection({
+    clearLinkedClientState: clearAuditLinkedState,
+    logPrefix: "[audit]",
+    channelScope: "audit"
+  });
+
+  const metaSwrKey = hasLinkedAdAccounts ? META_ADS_SWR_KEY : null;
+  const googleSwrKey = hasLinkedAdAccounts ? GOOGLE_ADS_SWR_KEY : null;
+
+  const { data: metaData, isLoading: isMetaLoading } = useSWR(metaSwrKey, fetchAdsPlatformData, {
+    dedupingInterval: 30_000
+  });
+  const { data: googleData, isLoading: isGoogleLoading } = useSWR(googleSwrKey, fetchAdsPlatformData, {
+    dedupingInterval: 30_000
+  });
+
+  const metaCampaigns = metaData?.campaigns ?? (SHOW_MOCK_DATA ? getCampaignsByPlatform("Meta") : []);
+  const googleCampaigns = googleData?.campaigns ?? (SHOW_MOCK_DATA ? getCampaignsByPlatform("Google") : []);
+
+  const allCampaigns = useMemo(() => [...metaCampaigns, ...googleCampaigns], [metaCampaigns, googleCampaigns]);
+
+  const isPrioritiesFresh = useMemo(() => {
+    if (!aiAuditUpdatedAt) return false;
+    return Date.now() - new Date(aiAuditUpdatedAt).getTime() < 60 * 60 * 1000;
+  }, [aiAuditUpdatedAt]);
+
+  useEffect(() => {
+    if (!hasLinkedAdAccounts) return;
+
+    let cancelled = false;
+    setFetchingCachedAudit(true);
+
+    async function loadCachedAudit() {
+      const row = await fetchAiStrategyCache();
+      if (cancelled) return;
+      setFetchingCachedAudit(false);
+      if (!row) return;
+      setHealthAudit((current) => (current ? current : row.insight));
+      setAiAuditUpdatedAt((current) => (current ? current : row.lastGeneratedAt));
+    }
+
+    void loadCachedAudit();
+    return () => {
+      cancelled = true;
+    };
+  }, [hasLinkedAdAccounts]);
 
   async function runAudit() {
     if (allCampaigns.length === 0) {
@@ -64,6 +138,7 @@ export default function AuditPage() {
     try {
       const result = await runHealthAudit(allCampaigns, 20, 2.5, "Audit page");
       setHealthAudit(result);
+      setAiAuditUpdatedAt(new Date().toISOString());
     } catch (error) {
       if ((error as Error).message === "PAYWALL_LIMIT_REACHED") {
         setIsPaywallOpen(true);
@@ -76,6 +151,22 @@ export default function AuditPage() {
     } finally {
       setLoadingHealth(false);
     }
+  }
+
+  function openFullAuditModal() {
+    if (allCampaigns.length === 0) {
+      toast({
+        title: "Липсват кампании",
+        description: "Свържи акаунти от Настройки, за да стартираш Health Audit."
+      });
+      return;
+    }
+    setConfirmFullAuditOpen(true);
+  }
+
+  async function confirmFullAuditAndRun() {
+    setConfirmFullAuditOpen(false);
+    await runAudit();
   }
 
   async function deepAuditCampaign(campaign: CampaignMetrics) {
@@ -127,111 +218,196 @@ export default function AuditPage() {
     new Set((healthAudit?.prioritizedActions ?? []).map((action) => action.type).filter(Boolean))
   ) as SkillType[];
 
+  const campaignsLoading = hasLinkedAdAccounts && (isMetaLoading || isGoogleLoading);
+  const showAuditBusyOverlay = (hasLinkedAdAccounts && fetchingCachedAudit && !healthAudit) || loadingHealth;
+
   return (
     <main className="space-y-4">
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle>Одит център</CardTitle>
-          <Button onClick={() => void runAudit()} disabled={loadingHealth}>
-            {loadingHealth ? "Анализ..." : "Стартирай Health Audit"}
-          </Button>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {allCampaigns.length === 0 ? (
+      {linkedAccountStatus === "loading" ? (
+        <AuditPageConnectionSkeleton />
+      ) : linkedAccountStatus === "not-linked" ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Одит център</CardTitle>
+          </CardHeader>
+          <CardContent>
             <Alert>
-              <AlertTitle>Няма свързани кампании</AlertTitle>
-              <AlertDescription>
-                Добави Meta/Google токен и account ID в `Настройки`, за да се зареждат live данни.
+              <AlertTitle>Няма свързани рекламни акаунти</AlertTitle>
+              <AlertDescription className="space-y-2">
+                <p>Свържи Meta или Google в Настройки, за да заредиш кампаниите и пълния одит.</p>
+                <Link
+                  href={"/settings" as Route}
+                  className="inline-flex h-9 items-center justify-center rounded-md border border-input bg-background px-3 text-sm font-medium transition hover:bg-accent hover:text-accent-foreground"
+                >
+                  Към настройки
+                </Link>
               </AlertDescription>
             </Alert>
-          ) : null}
-          {activatedSkillTypes.length > 0 ? (
-            <div className="space-y-2">
-              <p className="text-sm font-medium text-teal-200">Активирани AI Skills</p>
-              <div className="flex flex-wrap gap-2">
-                {activatedSkillTypes.map((skillType) => {
-                  const skill = SKILL_BADGE_MAP[skillType];
-                  const Icon = skill.icon;
-                  return (
-                    <span
-                      key={skillType}
-                      className="inline-flex items-center gap-1 rounded-full border border-teal-400/30 bg-teal-500/10 px-3 py-1 text-xs text-teal-200 shadow-[0_0_14px_rgba(45,212,191,0.25)]"
-                    >
-                      <Icon className="h-3.5 w-3.5" />
-                      {skill.label}
-                    </span>
-                  );
-                })}
+          </CardContent>
+        </Card>
+      ) : (
+        <>
+          <Card className="relative">
+            {showAuditBusyOverlay && (
+              <div
+                className="absolute inset-0 z-10 flex flex-col gap-3 rounded-lg border border-border/50 bg-background/80 p-4 backdrop-blur-sm"
+                aria-busy="true"
+              >
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  {loadingHealth ? "Генериране на AI одит…" : "Зареждане на запазения одит…"}
+                </div>
+                <Skeleton className="h-16 w-full" />
+                <Skeleton className="h-16 w-full" />
+                <Skeleton className="h-16 w-full" />
               </div>
-            </div>
-          ) : null}
-          {(healthAudit?.prioritizedActions ?? []).map((action) => (
-            <Alert key={action.task}>
-              <AlertTitle>
-                [{action.platform}] Impact {action.impactScore}
-              </AlertTitle>
-              <AlertDescription className="flex items-start justify-between gap-3">
+            )}
+            <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <CardTitle>Одит център</CardTitle>
+                {aiAuditUpdatedAt ? (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Последна актуализация: {formatAiAuditTimestamp(aiAuditUpdatedAt)}
+                  </p>
+                ) : null}
+                {isPrioritiesFresh ? (
+                  <p className="mt-1 text-xs text-teal-200/90">Генерирано преди по-малко от час…</p>
+                ) : null}
+              </div>
+              <div className="flex shrink-0 flex-col items-stretch gap-2 sm:items-end">
+                <Button
+                  className={cn(
+                    isPrioritiesFresh
+                      ? "border-teal-500/40 bg-transparent text-teal-100 hover:bg-teal-500/10"
+                      : "bg-emerald-500 text-white hover:bg-emerald-600"
+                  )}
+                  variant={isPrioritiesFresh ? "outline" : "default"}
+                  onClick={openFullAuditModal}
+                  disabled={loadingHealth || allCampaigns.length === 0 || campaignsLoading}
+                >
+                  {loadingHealth ? (
+                    <span className="inline-flex items-center gap-2">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Анализ...
+                    </span>
+                  ) : (
+                    "Стартирай Health Audit"
+                  )}
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {allCampaigns.length === 0 && !campaignsLoading ? (
+                <Alert>
+                  <AlertTitle>Няма свързани кампании</AlertTitle>
+                  <AlertDescription>
+                    Добави Meta/Google токен и account ID в Настройки, за да се зареждат live данни.
+                  </AlertDescription>
+                </Alert>
+              ) : null}
+              {campaignsLoading && allCampaigns.length === 0 ? (
                 <div className="space-y-2">
-                  <TypewriterInsight text={`${action.task}: ${action.reason}`} />
+                  <Skeleton className="h-10 w-full" />
+                  <Skeleton className="h-10 w-full" />
+                </div>
+              ) : null}
+              {activatedSkillTypes.length > 0 ? (
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-teal-200">Активирани AI Skills</p>
                   <div className="flex flex-wrap gap-2">
-                    {action.type ? (
-                      <span className="inline-flex items-center gap-1 rounded-full border border-sky-400/30 bg-sky-400/10 px-2.5 py-1 text-xs text-sky-200">
-                        <BadgeCheck className="h-3.5 w-3.5" />
-                        {SKILL_BADGE_MAP[action.type].label}
-                      </span>
-                    ) : null}
-                    {action.isKillRule ? (
-                      <span className="inline-flex items-center gap-1 rounded-full border border-rose-400/40 bg-rose-500/10 px-2.5 py-1 text-xs text-rose-200">
-                        <ShieldAlert className="h-3.5 w-3.5" />
-                        3x Kill Rule
-                      </span>
-                    ) : null}
+                    {activatedSkillTypes.map((skillType) => {
+                      const skill = SKILL_BADGE_MAP[skillType];
+                      const Icon = skill.icon;
+                      return (
+                        <span
+                          key={skillType}
+                          className="inline-flex items-center gap-1 rounded-full border border-teal-400/30 bg-teal-500/10 px-3 py-1 text-xs text-teal-200 shadow-[0_0_14px_rgba(45,212,191,0.25)]"
+                        >
+                          <Icon className="h-3.5 w-3.5" />
+                          {skill.label}
+                        </span>
+                      );
+                    })}
                   </div>
                 </div>
-                {action.actionType === "PAUSE" && action.campaignId ? (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => {
-                      const campaign = allCampaigns.find((item) => item.id === action.campaignId);
-                      if (!campaign) return;
-                      setPendingExecution([campaign]);
-                    }}
-                  >
-                    Изпълни
-                  </Button>
-                ) : null}
-              </AlertDescription>
-            </Alert>
-          ))}
-          {killCampaigns.length > 0 ? (
-            <Button
-              variant="outline"
-              className="border-rose-500/50 text-rose-300"
-              onClick={() => setPendingExecution(killCampaigns)}
-            >
-              Спри всички (Kill All)
-            </Button>
-          ) : null}
-        </CardContent>
-      </Card>
+              ) : null}
+              {(healthAudit?.prioritizedActions ?? []).map((action) => (
+                <Alert key={action.task}>
+                  <AlertTitle>
+                    [{action.platform}] Impact {action.impactScore}
+                  </AlertTitle>
+                  <AlertDescription className="flex items-start justify-between gap-3">
+                    <div className="space-y-2">
+                      <TypewriterInsight text={`${action.task}: ${action.reason}`} />
+                      <div className="flex flex-wrap gap-2">
+                        {action.type ? (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-sky-400/30 bg-sky-400/10 px-2.5 py-1 text-xs text-sky-200">
+                            <BadgeCheck className="h-3.5 w-3.5" />
+                            {SKILL_BADGE_MAP[action.type].label}
+                          </span>
+                        ) : null}
+                        {action.isKillRule ? (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-rose-400/40 bg-rose-500/10 px-2.5 py-1 text-xs text-rose-200">
+                            <ShieldAlert className="h-3.5 w-3.5" />
+                            3x Kill Rule
+                          </span>
+                        ) : null}
+                      </div>
+                    </div>
+                    {action.actionType === "PAUSE" && action.campaignId ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          const campaign = allCampaigns.find((item) => item.id === action.campaignId);
+                          if (!campaign) return;
+                          setPendingExecution([campaign]);
+                        }}
+                      >
+                        Изпълни
+                      </Button>
+                    ) : null}
+                  </AlertDescription>
+                </Alert>
+              ))}
+              {killCampaigns.length > 0 ? (
+                <Button
+                  variant="outline"
+                  className="border-rose-500/50 text-rose-300"
+                  onClick={() => setPendingExecution(killCampaigns)}
+                >
+                  Спри всички (Kill All)
+                </Button>
+              ) : null}
+            </CardContent>
+          </Card>
 
-      <section className="grid gap-4">
-        <CampaignTable
-          title="Meta кампании"
-          rows={metaData?.campaigns ?? []}
-          loadingCampaignId={loadingCampaignId}
-          auditByCampaign={auditByCampaign}
-          onDeepAudit={deepAuditCampaign}
-        />
-        <CampaignTable
-          title="Google кампании"
-          rows={googleData?.campaigns ?? []}
-          loadingCampaignId={loadingCampaignId}
-          auditByCampaign={auditByCampaign}
-          onDeepAudit={deepAuditCampaign}
-        />
-      </section>
+          <section className="grid gap-4">
+            {campaignsLoading && metaCampaigns.length === 0 ? (
+              <CampaignTableSkeleton title="Meta кампании" />
+            ) : (
+              <CampaignTable
+                title="Meta кампании"
+                rows={metaCampaigns}
+                loadingCampaignId={loadingCampaignId}
+                auditByCampaign={auditByCampaign}
+                onDeepAudit={deepAuditCampaign}
+              />
+            )}
+            {campaignsLoading && googleCampaigns.length === 0 ? (
+              <CampaignTableSkeleton title="Google кампании" />
+            ) : (
+              <CampaignTable
+                title="Google кампании"
+                rows={googleCampaigns}
+                loadingCampaignId={loadingCampaignId}
+                auditByCampaign={auditByCampaign}
+                onDeepAudit={deepAuditCampaign}
+              />
+            )}
+          </section>
+        </>
+      )}
 
       <AlertDialog open={Boolean(pendingExecution)} onOpenChange={(open) => !open && setPendingExecution(null)}>
         <AlertDialogContent>
@@ -251,6 +427,26 @@ export default function AuditPage() {
         </AlertDialogContent>
       </AlertDialog>
 
+      <Dialog open={confirmFullAuditOpen} onOpenChange={setConfirmFullAuditOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Стартиране на нов пълен одит</DialogTitle>
+            <DialogDescription className="text-left leading-relaxed">
+              Този одит анализира всички ваши кампании в дълбочина чрез Claude 4.x. Това действие ще се начисли към
+              вашия месечен лимит. Желаете ли да продължите?
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex-col gap-2 sm:flex-row sm:justify-end">
+            <Button type="button" variant="outline" onClick={() => setConfirmFullAuditOpen(false)}>
+              Отказ
+            </Button>
+            <Button type="button" onClick={() => void confirmFullAuditAndRun()}>
+              Потвърждавам и генерирай
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={isPaywallOpen} onOpenChange={setIsPaywallOpen}>
         <DialogContent>
           <DialogHeader>
@@ -265,6 +461,47 @@ export default function AuditPage() {
         </DialogContent>
       </Dialog>
     </main>
+  );
+}
+
+function formatAiAuditTimestamp(iso: string) {
+  return new Date(iso).toLocaleString("bg-BG", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
+function AuditPageConnectionSkeleton() {
+  return (
+    <Card>
+      <CardHeader>
+        <Skeleton className="h-7 w-40" />
+        <Skeleton className="h-4 w-64" />
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <Skeleton className="h-10 w-48" />
+        <Skeleton className="h-24 w-full" />
+        <Skeleton className="h-24 w-full" />
+      </CardContent>
+    </Card>
+  );
+}
+
+function CampaignTableSkeleton({ title }: { title: string }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{title}</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        <Skeleton className="h-10 w-full" />
+        <Skeleton className="h-10 w-full" />
+        <Skeleton className="h-10 w-full" />
+      </CardContent>
+    </Card>
   );
 }
 

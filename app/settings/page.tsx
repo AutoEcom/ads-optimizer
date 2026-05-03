@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Link2Off, Save } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -16,6 +17,7 @@ import {
 } from "@/services/user-settings-service";
 
 export default function SettingsPage() {
+  const router = useRouter();
   const [targetCpa, setTargetCpa] = useState("20");
   const [targetRoas, setTargetRoas] = useState("2.5");
   const [metaToken, setMetaToken] = useState("");
@@ -79,6 +81,7 @@ export default function SettingsPage() {
       await upsertPlatformToken(platform, token, accountId);
       setMessage(`Токенът за ${platform} е записан.`);
       await refreshConnectionStatus();
+      router.refresh();
       if (platform === "Meta") setMetaToken("");
       if (platform === "Google") setGoogleToken("");
     } catch (error) {
@@ -91,6 +94,7 @@ export default function SettingsPage() {
       await disconnectPlatformToken(platform);
       setMessage(`Връзката с ${platform} е прекъсната.`);
       await refreshConnectionStatus();
+      router.refresh();
     } catch (error) {
       setMessage((error as Error).message || `Неуспешно прекъсване за ${platform}.`);
     }

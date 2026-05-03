@@ -1,5 +1,6 @@
 import { AdVariation, AuditInsight, CampaignMetrics } from "@/types";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import { saveAiStrategyCache } from "@/services/ai-strategy-cache-service";
 import { PLAN_LIMITS } from "@/services/profile-service";
 
 export async function runDeepAudit(
@@ -78,6 +79,8 @@ export async function runHealthAudit(
     throw new Error("Неуспешен AI health одит.");
   }
   const result = (await response.json()) as AuditInsight;
+
+  await saveAiStrategyCache(result);
 
   if (supabase) {
     const {

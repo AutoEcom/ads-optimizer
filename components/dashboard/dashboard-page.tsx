@@ -1,7 +1,7 @@
 "use client";
 
-import { ReactNode, useEffect, useMemo, useState } from "react";
-import useSWR from "swr";
+import { ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import useSWR, { useSWRConfig } from "swr";
 import { useRouter } from "next/navigation";
 import type { Route } from "next";
 import {
@@ -14,6 +14,11 @@ import {
   Sparkles
 } from "lucide-react";
 
+import {
+  GOOGLE_ADS_SWR_KEY,
+  META_ADS_SWR_KEY,
+  useAdPlatformConnection
+} from "@/hooks/use-ad-platform-connection";
 import { useToast } from "@/hooks/use-toast";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
@@ -51,16 +56,25 @@ import {
   runDeepAudit,
   runHealthAudit
 } from "@/services/ai-service";
+import { fetchAiStrategyCache } from "@/services/ai-strategy-cache-service";
 import { getDigestTrend } from "@/services/daily-snapshot-service";
-import { getCampaignsByPlatform, morningDigest } from "@/services/mock-data";
-import { formatCurrency } from "@/lib/utils";
+import {
+  emptyMorningDigest,
+  getCampaignsByPlatform,
+  morningDigest
+} from "@/services/mock-data";
+import { cn, formatCurrency } from "@/lib/utils";
 import { AuditInsight, CampaignMetrics, CriticalIssue } from "@/types";
+
+const SHOW_MOCK_DATA = process.env.NEXT_PUBLIC_SHOW_MOCK_DATA === "true";
 
 export function DashboardPage() {
   const [auditByCampaign, setAuditByCampaign] = useState<Record<string, AuditInsight>>({});
   const [loadingCampaignId, setLoadingCampaignId] = useState<string | null>(null);
   const [isHealthAuditRunning, setIsHealthAuditRunning] = useState(false);
   const [healthAudit, setHealthAudit] = useState<AuditInsight | null>(null);
+  const [aiPrioritiesUpdatedAt, setAiPrioritiesUpdatedAt] = useState<string | null>(null);
+  const [confirmRegeneratePrioritiesOpen, setConfirmRegeneratePrioritiesOpen] = useState(false);
   const [isExecutingAction, setIsExecutingAction] = useState(false);
   const [pendingExecution, setPendingExecution] = useState<
     | { mode: "single"; campaign: CampaignMetrics; reason: string }
@@ -71,12 +85,33 @@ export function DashboardPage() {
   const router = useRouter();
   const [isPaywallOpen, setIsPaywallOpen] = useState(false);
   const { toast } = useToast();
+  const { mutate } = useSWRConfig();
 
   const [savedTargets] = useState({ targetCpa: 20, targetRoas: 2.5 });
-  const [digestState, setDigestState] = useState(morningDigest);
+  const [digestState, setDigestState] = useState(() =>
+    SHOW_MOCK_DATA ? morningDigest : emptyMorningDigest
+  );
+
+  const clearDisconnectedDashboardState = useCallback(async () => {
+    setAuditByCampaign({});
+    setHealthAudit(null);
+    setAiPrioritiesUpdatedAt(null);
+    setPendingExecution(null);
+    setDigestState(SHOW_MOCK_DATA ? morningDigest : emptyMorningDigest);
+    await mutate(META_ADS_SWR_KEY, undefined, { revalidate: false });
+    await mutate(GOOGLE_ADS_SWR_KEY, undefined, { revalidate: false });
+  }, [mutate]);
+
+  const { linkedAccountStatus, hasLinkedAdAccounts } = useAdPlatformConnection({
+    clearLinkedClientState: clearDisconnectedDashboardState,
+    logPrefix: "[dashboard]",
+    channelScope: "dashboard"
+  });
+  const metaSwrKey = hasLinkedAdAccounts ? META_ADS_SWR_KEY : null;
+  const googleSwrKey = hasLinkedAdAccounts ? GOOGLE_ADS_SWR_KEY : null;
 
   const { data: metaAdsData, error: metaAdsError, isLoading: isMetaLoading } = useSWR(
-    "/api/ads/meta",
+    metaSwrKey,
     fetchAdsPlatformData,
     { revalidateOnFocus: false, dedupingInterval: 30_000 }
   );
@@ -84,13 +119,15 @@ export function DashboardPage() {
     data: googleAdsData,
     error: googleAdsError,
     isLoading: isGoogleLoading
-  } = useSWR("/api/ads/google", fetchAdsPlatformData, {
+  } = useSWR(googleSwrKey, fetchAdsPlatformData, {
     revalidateOnFocus: false,
     dedupingInterval: 30_000
   });
 
-  const metaCampaignsLive = metaAdsData?.campaigns ?? getCampaignsByPlatform("Meta");
-  const googleCampaignsLive = googleAdsData?.campaigns ?? getCampaignsByPlatform("Google");
+  const metaCampaignsLive =
+    metaAdsData?.campaigns ?? (SHOW_MOCK_DATA ? getCampaignsByPlatform("Meta") : []);
+  const googleCampaignsLive =
+    googleAdsData?.campaigns ?? (SHOW_MOCK_DATA ? getCampaignsByPlatform("Google") : []);
   const metaCurrency = metaAdsData?.currencyCode ?? "EUR";
   const googleCurrency = googleAdsData?.currencyCode ?? "EUR";
   const metaTokenExpired = isTokenExpired(metaAdsError);
@@ -160,13 +197,22 @@ export function DashboardPage() {
   const activeAlarmsCount = (healthAudit?.prioritizedActions.length ?? 0) + criticalIssues.length;
 
   const connectionStatus = useMemo(() => {
+    if (!hasLinkedAdAccounts) return "Няма свързани акаунти";
     if (metaTokenExpired || googleTokenExpired) return "Провери токените в Настройки";
-    if (allCampaigns.length > 0) return "Live данни активни";
-    return "Очаква свързване";
-  }, [metaTokenExpired, googleTokenExpired, allCampaigns.length]);
-  const isConnectionHealthy = !metaTokenExpired && !googleTokenExpired && allCampaigns.length > 0;
+    return "Live данни активни";
+  }, [hasLinkedAdAccounts, metaTokenExpired, googleTokenExpired]);
+
+  const connectionStatusDotClass = useMemo(() => {
+    if (!hasLinkedAdAccounts) return "bg-zinc-500 shadow-[0_0_8px_rgba(113,113,122,0.6)]";
+    if (metaTokenExpired || googleTokenExpired) {
+      return "bg-rose-400 shadow-[0_0_10px_rgba(244,63,94,0.85)]";
+    }
+    return "bg-emerald-400 shadow-[0_0_10px_rgba(16,185,129,0.9)]";
+  }, [hasLinkedAdAccounts, metaTokenExpired, googleTokenExpired]);
 
   useEffect(() => {
+    if (!hasLinkedAdAccounts) return;
+
     async function loadDigest() {
       try {
         const digest = await getDigestTrend();
@@ -176,12 +222,34 @@ export function DashboardPage() {
           topMessage: digest.topMessage
         });
       } catch {
-        setDigestState(morningDigest);
+        setDigestState(SHOW_MOCK_DATA ? morningDigest : emptyMorningDigest);
       }
     }
 
     void loadDigest();
-  }, []);
+  }, [hasLinkedAdAccounts]);
+
+  useEffect(() => {
+    if (!hasLinkedAdAccounts) return;
+
+    let cancelled = false;
+    async function loadCachedPriorities() {
+      const row = await fetchAiStrategyCache();
+      if (cancelled || !row) return;
+      setHealthAudit((current) => (current ? current : row.insight));
+      setAiPrioritiesUpdatedAt((current) => (current ? current : row.lastGeneratedAt));
+    }
+
+    void loadCachedPriorities();
+    return () => {
+      cancelled = true;
+    };
+  }, [hasLinkedAdAccounts]);
+
+  const isPrioritiesFresh = useMemo(() => {
+    if (!aiPrioritiesUpdatedAt) return false;
+    return Date.now() - new Date(aiPrioritiesUpdatedAt).getTime() < 60 * 60 * 1000;
+  }, [aiPrioritiesUpdatedAt]);
 
   const handleDeepAudit = async (campaign: CampaignMetrics) => {
     setLoadingCampaignId(campaign.id);
@@ -211,6 +279,7 @@ export function DashboardPage() {
         "Home dashboard executive view"
       );
       setHealthAudit(result);
+      setAiPrioritiesUpdatedAt(new Date().toISOString());
     } catch (error) {
       if ((error as Error).message === "PAYWALL_LIMIT_REACHED") {
         setIsPaywallOpen(true);
@@ -223,6 +292,22 @@ export function DashboardPage() {
     } finally {
       setIsHealthAuditRunning(false);
     }
+  };
+
+  const openRegeneratePrioritiesModal = () => {
+    if (allCampaigns.length === 0) {
+      toast({
+        title: "Липсват кампании",
+        description: "Свържи акаунти от Настройки, за да стартираш Health Audit."
+      });
+      return;
+    }
+    setConfirmRegeneratePrioritiesOpen(true);
+  };
+
+  const confirmRegenerateAndRunAudit = async () => {
+    setConfirmRegeneratePrioritiesOpen(false);
+    await handleRunHealthAudit();
   };
 
   const handleFixWithAi = (issue: CriticalIssue) => {
@@ -304,38 +389,73 @@ export function DashboardPage() {
 
   return (
     <main className="mx-auto min-h-screen max-w-7xl space-y-6 px-4 py-8">
-      <section className="grid gap-4">
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-xl">
-              <Activity className="h-5 w-5 text-primary" />
-              Онбординг: Свържи акаунт
-            </CardTitle>
-            <CardDescription>Първа стъпка за активиране на живи данни</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <Button className="w-full" variant="outline" onClick={() => router.push("/settings" as Route)}>
-              Свържи Meta Ads
-            </Button>
-            <Button className="w-full" variant="outline" onClick={() => router.push("/settings" as Route)}>
-              Свържи Google Ads
-            </Button>
-            <p className="inline-flex items-center gap-2 text-sm text-muted-foreground">
-              <span
-                className={`h-2.5 w-2.5 rounded-full ${
-                  isConnectionHealthy
-                    ? "bg-emerald-400 shadow-[0_0_10px_rgba(16,185,129,0.9)]"
-                    : "bg-rose-400 shadow-[0_0_10px_rgba(244,63,94,0.85)]"
-                }`}
-                aria-hidden="true"
-              />
-              Статус: {connectionStatus}
-            </p>
-          </CardContent>
-        </Card>
-      </section>
+      {linkedAccountStatus === "loading" ? (
+        <DashboardConnectionSkeleton />
+      ) : linkedAccountStatus === "not-linked" ? (
+        <section className="mx-auto max-w-2xl">
+          <Card className="border-teal-500/25 shadow-[0_0_32px_rgba(20,184,166,0.15)]">
+            <CardHeader className="space-y-3 text-center sm:text-left">
+              <CardTitle className="flex flex-col items-center gap-2 text-2xl sm:flex-row sm:justify-start">
+                <Activity className="h-7 w-7 shrink-0 text-primary" />
+                Център за онбординг
+              </CardTitle>
+              <p className="text-base font-medium leading-relaxed text-foreground">
+                Добре дошли в AdGuard AI! За да анализираме вашите кампании и да открием критични загуби, трябва
+                първо да свържете вашия рекламен акаунт.
+              </p>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="flex flex-col gap-3 sm:flex-row">
+                <Button
+                  size="lg"
+                  className="flex-1"
+                  onClick={() => router.push("/settings" as Route)}
+                >
+                  Свържи Meta Ads
+                </Button>
+                <Button
+                  size="lg"
+                  className="flex-1"
+                  onClick={() => router.push("/settings" as Route)}
+                >
+                  Свържи Google Ads
+                </Button>
+              </div>
+              <p className="inline-flex items-center gap-2 text-sm text-muted-foreground">
+                <span
+                  className={cn("h-2.5 w-2.5 shrink-0 rounded-full", connectionStatusDotClass)}
+                  aria-hidden="true"
+                />
+                Статус: {connectionStatus}
+              </p>
+            </CardContent>
+          </Card>
+        </section>
+      ) : (
+        <>
+          <section className="grid gap-4">
+            <Card>
+              <CardContent className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:justify-between">
+                <p className="inline-flex items-center gap-2 text-sm text-muted-foreground">
+                  <span
+                    className={cn("h-2.5 w-2.5 shrink-0 rounded-full", connectionStatusDotClass)}
+                    aria-hidden="true"
+                  />
+                  Статус: {connectionStatus}
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="sm:w-auto"
+                  onClick={() => router.push("/settings" as Route)}
+                >
+                  Управление на връзките
+                </Button>
+              </CardContent>
+            </Card>
+          </section>
 
-      <Card>
+          <Card>
         <CardHeader>
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
@@ -377,11 +497,27 @@ export function DashboardPage() {
 
             <div className="premium-glow rounded-xl border border-teal-500/20 p-4">
               <p className="text-sm font-medium text-foreground">Top Priority Actions</p>
+              {aiPrioritiesUpdatedAt ? (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Последна актуализация: {formatAiPrioritiesTimestamp(aiPrioritiesUpdatedAt)}
+                </p>
+              ) : null}
+              {isPrioritiesFresh ? (
+                <p className="mt-1 text-xs text-teal-200/90">
+                  Генерирани преди по-малко от час — данните вероятно са още актуални.
+                </p>
+              ) : null}
               <div className="mt-3">
                 <Button
-                  className="bg-emerald-500 text-white hover:bg-emerald-600 sm:w-auto"
-                  onClick={() => void handleRunHealthAudit()}
-                  disabled={isHealthAuditRunning}
+                  className={cn(
+                    "sm:w-auto",
+                    isPrioritiesFresh
+                      ? "border-teal-500/40 bg-transparent text-teal-100 hover:bg-teal-500/10"
+                      : "bg-emerald-500 text-white hover:bg-emerald-600"
+                  )}
+                  variant={isPrioritiesFresh ? "outline" : "default"}
+                  onClick={openRegeneratePrioritiesModal}
+                  disabled={isHealthAuditRunning || allCampaigns.length === 0}
                 >
                   {isHealthAuditRunning ? (
                     <span className="inline-flex items-center gap-2">
@@ -515,9 +651,7 @@ export function DashboardPage() {
             </Alert>
           ))}
           {!metaTokenExpired && criticalIssues.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              Няма активни критични проблеми. Свържи акаунти за live alerts.
-            </p>
+            <p className="text-sm text-muted-foreground">Няма активни критични проблеми към момента.</p>
           ) : null}
         </CardContent>
       </Card>
@@ -582,20 +716,44 @@ export function DashboardPage() {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-xl">
-            <Eye className="h-5 w-5 text-primary" />
-            Raw Data View
-          </CardTitle>
-          <CardDescription>Суров изглед на мок данните за бърз debug</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <pre className="overflow-x-auto rounded-md border border-border/60 bg-muted/20 p-4 text-xs text-muted-foreground">
-            {JSON.stringify({ campaigns: allCampaigns, healthAudit, digestState }, null, 2)}
-          </pre>
-        </CardContent>
-      </Card>
+          {SHOW_MOCK_DATA ? (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-xl">
+                  <Eye className="h-5 w-5 text-primary" />
+                  Raw Data View
+                </CardTitle>
+                <CardDescription>Суров изглед на мок данните за бърз debug</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <pre className="overflow-x-auto rounded-md border border-border/60 bg-muted/20 p-4 text-xs text-muted-foreground">
+                  {JSON.stringify({ campaigns: allCampaigns, healthAudit, digestState }, null, 2)}
+                </pre>
+              </CardContent>
+            </Card>
+          ) : null}
+        </>
+      )}
+
+      <Dialog open={confirmRegeneratePrioritiesOpen} onOpenChange={setConfirmRegeneratePrioritiesOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Обновяване на AI приоритетите</DialogTitle>
+            <DialogDescription className="text-left leading-relaxed">
+              Това действие ще направи нов задълбочен анализ на вашите кампании през Claude 4.x. Това ще се начисли
+              към вашия месечен лимит за Usage. Сигурни ли сте?
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex-col gap-2 sm:flex-row sm:justify-end">
+            <Button type="button" variant="outline" onClick={() => setConfirmRegeneratePrioritiesOpen(false)}>
+              Отказ
+            </Button>
+            <Button type="button" onClick={() => void confirmRegenerateAndRunAudit()}>
+              Потвърждавам и генерирай
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={isPaywallOpen} onOpenChange={setIsPaywallOpen}>
         <DialogContent>
@@ -629,6 +787,58 @@ export function DashboardPage() {
         </AlertDialogContent>
       </AlertDialog>
     </main>
+  );
+}
+
+function formatAiPrioritiesTimestamp(iso: string) {
+  return new Date(iso).toLocaleString("bg-BG", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
+function DashboardConnectionSkeleton() {
+  return (
+    <section className="grid gap-4">
+      <Card>
+        <CardHeader className="space-y-2">
+          <Skeleton className="h-7 w-56" />
+          <Skeleton className="h-4 w-full max-w-md" />
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <Skeleton className="h-11 w-full" />
+          <Skeleton className="h-11 w-full" />
+          <Skeleton className="h-4 w-40" />
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <Skeleton className="h-7 w-48" />
+          <Skeleton className="h-4 w-72" />
+        </CardHeader>
+        <CardContent className="grid gap-6 lg:grid-cols-[220px_1fr]">
+          <div className="flex justify-center">
+            <Skeleton className="h-36 w-36 rounded-full" />
+          </div>
+          <div className="space-y-3">
+            <div className="grid gap-3 sm:grid-cols-3">
+              <Skeleton className="h-24 w-full" />
+              <Skeleton className="h-24 w-full" />
+              <Skeleton className="h-24 w-full" />
+            </div>
+            <Skeleton className="h-16 w-full" />
+            <Skeleton className="h-20 w-full" />
+          </div>
+        </CardContent>
+      </Card>
+      <div className="grid gap-4 lg:grid-cols-2">
+        <MetaCampaignSkeleton />
+        <MetaCampaignSkeleton title="Google кампании" />
+      </div>
+    </section>
   );
 }
 
