@@ -10,6 +10,15 @@ const config: Config = {
   ],
   theme: {
     extend: {
+      keyframes: {
+        "skill-pulse": {
+          "0%, 100%": { boxShadow: "0 0 0 0 rgba(45, 212, 191, 0.45)" },
+          "50%": { boxShadow: "0 0 0 8px rgba(45, 212, 191, 0.08)" }
+        }
+      },
+      animation: {
+        "skill-pulse": "skill-pulse 2.4s ease-in-out infinite"
+      },
       colors: {
         border: "hsl(240 3.7% 15.9%)",
         input: "hsl(240 3.7% 15.9%)",

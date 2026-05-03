@@ -20,6 +20,12 @@ import {
   useAdPlatformConnection
 } from "@/hooks/use-ad-platform-connection";
 import { useToast } from "@/hooks/use-toast";
+import { PrioritizedActionAlert } from "@/components/ads/prioritized-action-alert";
+import {
+  CampaignPlatformGlyph,
+  ImpactScorePill,
+  PlatformCornerBadge
+} from "@/components/ads/platform-icons";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   AlertDialog,
@@ -63,7 +69,9 @@ import {
   getCampaignsByPlatform,
   morningDigest
 } from "@/services/mock-data";
-import { cn, formatCurrency } from "@/lib/utils";
+import { fetchAdsPlatformData } from "@/lib/client-ads";
+import { formatSlashDatesToBulgarian } from "@/lib/format-insight-text";
+import { cn, formatCurrency, formatCurrencyLatin } from "@/lib/utils";
 import { AuditInsight, CampaignMetrics, CriticalIssue } from "@/types";
 
 const SHOW_MOCK_DATA = process.env.NEXT_PUBLIC_SHOW_MOCK_DATA === "true";
@@ -148,6 +156,24 @@ export function DashboardPage() {
 
     return { spend, conversions, avgCpa, avgRoas };
   }, [allCampaigns]);
+
+  const executiveAccountSpend = useMemo(() => {
+    const fallbackMeta = metaCampaignsLive.reduce((s, c) => s + c.spend, 0);
+    const fallbackGoogle = googleCampaignsLive.reduce((s, c) => s + c.spend, 0);
+    const m = typeof metaAdsData?.totalSpend === "number" ? metaAdsData.totalSpend : fallbackMeta;
+    const g = typeof googleAdsData?.totalSpend === "number" ? googleAdsData.totalSpend : fallbackGoogle;
+    return { meta: m, google: g, combined: m + g };
+  }, [metaAdsData?.totalSpend, googleAdsData?.totalSpend, metaCampaignsLive, googleCampaignsLive]);
+
+  const executiveSpendDisplay = useMemo(() => {
+    if (metaCurrency !== googleCurrency) {
+      return `${formatCurrencyLatin(executiveAccountSpend.meta, metaCurrency)} · ${formatCurrencyLatin(
+        executiveAccountSpend.google,
+        googleCurrency
+      )}`;
+    }
+    return formatCurrencyLatin(executiveAccountSpend.combined, metaCurrency);
+  }, [executiveAccountSpend, metaCurrency, googleCurrency]);
 
   const criticalIssues = useMemo(() => {
     const targetCpa = savedTargets.targetCpa;
@@ -468,14 +494,17 @@ export function DashboardPage() {
           </div>
         </CardHeader>
         <CardContent className="grid gap-6 lg:grid-cols-[220px_1fr]">
-          <div className="flex items-center justify-center">
+          <div className="flex flex-col items-center justify-center gap-2">
+            <p className="text-center text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Общ здравен статус
+            </p>
             <RadialScore score={healthAudit?.healthScore ?? 0} />
           </div>
           <div className="space-y-4">
             <div className="grid gap-3 sm:grid-cols-3">
               <MetricCard
                 label={<span>Потенциално спасени EUR</span>}
-                value={formatCurrency(potentialSavedEur, displayCurrency)}
+                value={formatCurrencyLatin(potentialSavedEur, displayCurrency)}
                 progress={potentialSavedEur > 0 ? 48 : 0}
               />
               <MetricCard label="Активни аларми" value={`${activeAlarmsCount}`} progress={40} />
@@ -490,7 +519,7 @@ export function DashboardPage() {
                     ) : null}
                   </span>
                 }
-                value={formatCurrency(totals.spend, metaCurrency)}
+                value={executiveSpendDisplay}
                 progress={78}
               />
             </div>
@@ -534,33 +563,33 @@ export function DashboardPage() {
             <div>
               <p className="text-sm font-medium">Prioritized Action Plan</p>
               <div className="mt-2 space-y-2">
-                {(healthAudit?.prioritizedActions ?? []).slice(0, 5).map((action) => (
-                  <Alert key={`${action.platform}-${action.task}`} className="border-primary/40">
-                    <AlertTitle>
-                      [{action.platform}] Impact {action.impactScore}
-                    </AlertTitle>
-                    <AlertDescription>
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="font-medium text-foreground">{action.task}</p>
-                          <p>{action.reason}</p>
-                        </div>
-                        {action.actionType === "PAUSE" && action.campaignId ? (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => {
-                              const campaign = allCampaigns.find((item) => item.id === action.campaignId);
-                              if (!campaign) return;
-                              queueExecution(campaign, action.reason);
-                            }}
-                          >
-                            Изпълни
-                          </Button>
-                        ) : null}
-                      </div>
-                    </AlertDescription>
-                  </Alert>
+                {(healthAudit?.prioritizedActions ?? []).slice(0, 5).map((action, idx) => (
+                  <PrioritizedActionAlert
+                    key={`${action.campaignId ?? "na"}-${action.type ?? "na"}-${idx}`}
+                    action={action}
+                    campaign={
+                      action.campaignId
+                        ? (allCampaigns.find((item) => item.id === action.campaignId) ?? null)
+                        : null
+                    }
+                    targetCpa={savedTargets.targetCpa}
+                    auditSnapshotReady={Boolean(healthAudit)}
+                    footer={
+                      action.actionType === "PAUSE" && action.campaignId ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            const campaign = allCampaigns.find((item) => item.id === action.campaignId);
+                            if (!campaign) return;
+                            queueExecution(campaign, action.reason);
+                          }}
+                        >
+                          Изпълни
+                        </Button>
+                      ) : null
+                    }
+                  />
                 ))}
                 {!healthAudit || healthAudit.prioritizedActions.length === 0 ? (
                   <p className="text-sm text-muted-foreground">
@@ -580,14 +609,23 @@ export function DashboardPage() {
               </div>
               <div className="mt-2 space-y-2">
                 {(healthAudit?.killList ?? []).slice(0, 5).map((item) => (
-                  <Alert key={item.campaignId} className="border-red-500/50 bg-red-500/5">
-                    <AlertTitle>
-                      {item.campaignName} ({item.platform})
+                  <Alert key={item.campaignId} className="relative border-red-500/50 bg-red-500/5 pt-2">
+                    <div className="absolute right-3 top-3 z-[1]">
+                      <PlatformCornerBadge platform={item.platform} metaPlacement={item.metaPlacement} />
+                    </div>
+                    <AlertTitle className="flex flex-wrap items-center gap-2 pr-20">
+                      <CampaignPlatformGlyph platform={item.platform} metaPlacement={item.metaPlacement} />
+                      <span>{item.campaignName}</span>
                     </AlertTitle>
                     <AlertDescription>
                       <div className="flex items-start justify-between gap-3">
                         <p>
-                          {item.reason} Разход: {formatCurrency(item.spend)}.
+                          {formatSlashDatesToBulgarian(item.reason)} Разход:{" "}
+                          {formatCurrencyLatin(
+                            item.spend,
+                            allCampaigns.find((c) => c.id === item.campaignId)?.currencyCode ?? "EUR"
+                          )}
+                          .
                         </p>
                         <Button
                           size="sm"
@@ -637,19 +675,28 @@ export function DashboardPage() {
               </AlertDescription>
             </Alert>
           ) : null}
-          {criticalIssues.map((issue) => (
-            <Alert key={issue.id} className="border-red-500/50 bg-red-500/5">
-              <AlertTitle>
-                {issue.severity}: {issue.title} ({issue.platform})
-              </AlertTitle>
-              <AlertDescription className="space-y-3">
-                <p>{issue.description}</p>
-                <Button size="sm" onClick={() => handleFixWithAi(issue)}>
-                  Fix with AI
-                </Button>
-              </AlertDescription>
-            </Alert>
-          ))}
+          {criticalIssues.map((issue) => {
+            const related = allCampaigns.find((c) => c.id === issue.campaignId);
+            return (
+              <Alert key={issue.id} className="relative border-red-500/50 bg-red-500/5 pt-2">
+                <div className="absolute right-3 top-3 z-[1]">
+                  <PlatformCornerBadge platform={issue.platform} metaPlacement={related?.metaPlacement} />
+                </div>
+                <AlertTitle className="flex flex-wrap items-center gap-2 pr-20">
+                  <CampaignPlatformGlyph platform={issue.platform} metaPlacement={related?.metaPlacement} />
+                  <span>
+                    {issue.severity}: {issue.title}
+                  </span>
+                </AlertTitle>
+                <AlertDescription className="space-y-3">
+                  <p>{formatSlashDatesToBulgarian(issue.description)}</p>
+                  <Button size="sm" onClick={() => handleFixWithAi(issue)}>
+                    Fix with AI
+                  </Button>
+                </AlertDescription>
+              </Alert>
+            );
+          })}
           {!metaTokenExpired && criticalIssues.length === 0 ? (
             <p className="text-sm text-muted-foreground">Няма активни критични проблеми към момента.</p>
           ) : null}
@@ -710,9 +757,9 @@ export function DashboardPage() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-2 text-sm">
-          <p>Вчерашен разход: {formatCurrency(digestState.spendYesterday)}</p>
+          <p>Вчерашен разход: {formatCurrencyLatin(digestState.spendYesterday, "EUR")}</p>
           <p>Кампании за корекция: {digestState.campaignsToFix}</p>
-          <p className="text-primary">{digestState.topMessage}</p>
+          <p className="text-primary">{formatSlashDatesToBulgarian(digestState.topMessage)}</p>
         </CardContent>
       </Card>
 
@@ -932,13 +979,16 @@ function CampaignTable({
             <Alert key={insight.campaignId ?? campaign.id} className="border-primary/40">
               <AlertTitle>AI одит: {campaign.campaignName}</AlertTitle>
               <AlertDescription>
-                <ul className="space-y-1">
-                  {insight.prioritizedActions.slice(0, 3).map((action) => (
-                    <li key={action.task}>
-                      <span className="font-medium">
-                        [{action.platform}] Impact {action.impactScore}:
-                      </span>{" "}
-                      {action.task}
+                <ul className="space-y-2">
+                  {insight.prioritizedActions.slice(0, 3).map((action, i) => (
+                    <li key={`${action.task}-${i}`} className="flex flex-wrap items-start gap-2">
+                      {action.platform !== "Общо" ? (
+                        <CampaignPlatformGlyph platform={action.platform} metaPlacement={action.metaPlacement} />
+                      ) : null}
+                      <ImpactScorePill score={action.impactScore} label="Въздействие" />
+                      <span className="text-sm text-muted-foreground">
+                        {formatSlashDatesToBulgarian(action.task)}
+                      </span>
                     </li>
                   ))}
                 </ul>
@@ -969,7 +1019,7 @@ function RadialScore({ score }: { score: number }) {
       <div className="absolute inset-3 flex items-center justify-center rounded-full bg-background">
         <div className="text-center">
           <p className="text-3xl font-semibold">{safeScore}</p>
-          <p className="text-xs text-muted-foreground">Health Score</p>
+          <p className="text-xs text-muted-foreground">Health score (0–100)</p>
         </div>
       </div>
     </div>
@@ -991,40 +1041,8 @@ function MetaCampaignSkeleton({ title = "Meta кампании" }: { title?: str
   );
 }
 
-type AdsPlatformData = {
-  campaigns: CampaignMetrics[];
-  currencyCode: string;
-};
-
-type AdsPlatformError = Error & {
-  status?: number;
-  code?: string;
-};
-
-async function fetchAdsPlatformData(url: string): Promise<AdsPlatformData> {
-  const response = await fetch(url, { cache: "no-store" });
-  const payload = (await response.json()) as {
-    campaigns?: CampaignMetrics[];
-    currencyCode?: string;
-    error?: string;
-    code?: string;
-  };
-
-  if (!response.ok) {
-    const error = new Error(payload.error ?? "Неуспешно зареждане на данни.") as AdsPlatformError;
-    error.status = response.status;
-    error.code = payload.code;
-    throw error;
-  }
-
-  return {
-    campaigns: payload.campaigns ?? [],
-    currencyCode: payload.currencyCode ?? "EUR"
-  };
-}
-
 function isTokenExpired(error: unknown) {
   if (!error || typeof error !== "object") return false;
-  const err = error as AdsPlatformError;
+  const err = error as Error & { status?: number; code?: string };
   return err.status === 401 || err.code === "TOKEN_EXPIRED";
 }

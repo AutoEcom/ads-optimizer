@@ -1,4 +1,4 @@
-import { CampaignMetrics } from "@/types";
+import type { CampaignMetrics, MetaPlacement } from "@/types";
 
 type MetaCampaign = {
   id: string;
@@ -21,11 +21,27 @@ type MetaInsights = {
 
 const META_API_VERSION = process.env.META_MARKETING_API_VERSION ?? "v21.0";
 
+async function fetchMetaAccountTotalSpend(normalizedAccount: string, accessToken: string): Promise<number> {
+  const url = new URL(`https://graph.facebook.com/${META_API_VERSION}/${normalizedAccount}/insights`);
+  url.searchParams.set("fields", "spend");
+  url.searchParams.set("date_preset", "last_30d");
+  url.searchParams.set("access_token", accessToken);
+  const res = await fetch(url.toString(), { cache: "no-store" });
+  if (res.status === 401) {
+    const error = new Error("TOKEN_EXPIRED");
+    (error as Error & { status?: number }).status = 401;
+    throw error;
+  }
+  if (!res.ok) return 0;
+  const json = (await res.json()) as { data?: Array<{ spend?: string }> };
+  return Number(json.data?.[0]?.spend ?? 0);
+}
+
 export async function fetchMetaCampaigns(
   accessToken: string,
   adAccountId: string,
   targetCpa: number
-): Promise<{ campaigns: CampaignMetrics[]; currencyCode: string }> {
+): Promise<{ campaigns: CampaignMetrics[]; currencyCode: string; totalSpend: number }> {
   const normalizedAccount = adAccountId.startsWith("act_") ? adAccountId : `act_${adAccountId}`;
   const baseUrl = `https://graph.facebook.com/${META_API_VERSION}/${normalizedAccount}/campaigns`;
 
@@ -66,10 +82,16 @@ export async function fetchMetaCampaigns(
     campaigns: campaignsPayload.data
   };
 
-  const results = await Promise.all(
-    campaignsPayload.data.map(async (campaign) => {
-      const insights = await fetchCampaignInsights(campaign.id, accessToken);
+  const [accountTotalSpend, results] = await Promise.all([
+    fetchMetaAccountTotalSpend(normalizedAccount, accessToken),
+    Promise.all(
+      campaignsPayload.data.map(async (campaign) => {
+      const [insights, platformSpend] = await Promise.all([
+        fetchCampaignInsights(campaign.id, accessToken),
+        fetchPublisherPlatformBreakdown(campaign.id, accessToken)
+      ]);
       rawMetaResponse[campaign.id] = insights;
+      const metaPlacement = inferMetaPlacement(platformSpend);
       const conversions = extractConversions(insights.actions, insights.action_values);
       const spend = Number(insights.spend ?? 0);
       const roas = extractRoas(insights.purchase_roas);
@@ -90,10 +112,15 @@ export async function fetchMetaCampaigns(
         ctr: Number(insights.ctr ?? 0),
         impressions: Number(insights.impressions ?? 0),
         frequency,
-        targetCpa
+        targetCpa,
+        metaPlacement
       } satisfies CampaignMetrics;
-    })
-  );
+      })
+    )
+  ]);
+
+  const summedCampaignSpend = results.reduce((sum, c) => sum + c.spend, 0);
+  const totalSpend = Math.max(accountTotalSpend, summedCampaignSpend);
 
   console.log(JSON.stringify(rawMetaResponse, null, 2));
   console.log(
@@ -112,7 +139,7 @@ export async function fetchMetaCampaigns(
     )
   );
 
-  return { campaigns: results, currencyCode };
+  return { campaigns: results, currencyCode, totalSpend: Number(totalSpend.toFixed(2)) };
 }
 
 export async function updateCampaignStatus(
@@ -159,6 +186,49 @@ async function fetchCampaignInsights(campaignId: string, accessToken: string): P
 
   const payload = (await insightsResponse.json()) as { data?: MetaInsights[] };
   return payload.data?.[0] ?? {};
+}
+
+async function fetchPublisherPlatformBreakdown(
+  campaignId: string,
+  accessToken: string
+): Promise<Record<string, number>> {
+  const insightsUrl = new URL(`https://graph.facebook.com/${META_API_VERSION}/${campaignId}/insights`);
+  insightsUrl.searchParams.set("fields", "spend");
+  insightsUrl.searchParams.set("breakdowns", "publisher_platform");
+  insightsUrl.searchParams.set("date_preset", "last_30d");
+  insightsUrl.searchParams.set("access_token", accessToken);
+
+  const insightsResponse = await fetch(insightsUrl.toString(), { cache: "no-store" });
+  if (!insightsResponse.ok) {
+    return {};
+  }
+
+  const payload = (await insightsResponse.json()) as {
+    data?: Array<{ spend?: string; publisher_platform?: string }>;
+  };
+  const spends: Record<string, number> = {};
+  for (const row of payload.data ?? []) {
+    const key = String(row.publisher_platform ?? "unknown").toLowerCase();
+    spends[key] = (spends[key] ?? 0) + Number(row.spend ?? 0);
+  }
+  return spends;
+}
+
+function inferMetaPlacement(spends: Record<string, number>): MetaPlacement {
+  const fb =
+    (spends.facebook ?? 0) +
+    (spends.fb ?? 0) +
+    (spends.an_classic ?? 0) +
+    (spends.audience_network ?? 0);
+  const ig = spends.instagram ?? 0;
+  const sum = fb + ig;
+  if (sum < 0.01) return "other";
+  const rIg = ig / sum;
+  const rFb = fb / sum;
+  if (rIg >= 0.58) return "instagram";
+  if (rFb >= 0.58) return "facebook";
+  if (ig > 0 && fb > 0) return "mixed";
+  return ig > fb ? "instagram" : "facebook";
 }
 
 function extractConversions(

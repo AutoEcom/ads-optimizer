@@ -1,5 +1,8 @@
 export type Platform = "Meta" | "Google";
 
+/** За Meta: доминираща мрежа по разход (insights breakdown publisher_platform). */
+export type MetaPlacement = "facebook" | "instagram" | "mixed" | "other";
+
 export type CampaignMetrics = {
   id: string;
   platform: Platform;
@@ -15,6 +18,7 @@ export type CampaignMetrics = {
   impressionShare?: number;
   searchTerms?: string[];
   targetCpa: number;
+  metaPlacement?: MetaPlacement;
 };
 
 export type CriticalIssue = {
@@ -53,6 +57,8 @@ export type PrioritizedAction = {
   impactScore: number;
   reason: string;
   platform: Platform | "Общо";
+  /** Наследено от кампанията (Meta placement), за икони в UI. */
+  metaPlacement?: MetaPlacement;
   campaignId?: string;
   actionType?: "PAUSE" | "ACTIVATE";
   type?: SkillType;
@@ -77,6 +83,7 @@ export type KillListItem = {
   campaignId: string;
   campaignName: string;
   platform: Platform;
+  metaPlacement?: MetaPlacement;
   cpa: number;
   targetCpa: number;
   spend: number;

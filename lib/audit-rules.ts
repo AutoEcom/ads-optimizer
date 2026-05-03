@@ -9,6 +9,7 @@ export function buildKillList(campaigns: CampaignMetrics[], targetCpa: number): 
       campaignId: campaign.id,
       campaignName: campaign.campaignName,
       platform: campaign.platform,
+      metaPlacement: campaign.platform === "Meta" ? campaign.metaPlacement : undefined,
       cpa: campaign.cpa,
       targetCpa,
       spend: campaign.spend,
@@ -33,6 +34,7 @@ export function buildHeuristicActions(
           2
         )}). Липсва стабилен learning сигнал.`,
         platform: campaign.platform,
+        metaPlacement: campaign.platform === "Meta" ? campaign.metaPlacement : undefined,
         campaignId: campaign.id,
         type: "BUDGET_SUFFICIENCY"
       });
@@ -46,6 +48,7 @@ export function buildHeuristicActions(
           2
         )}. Нужна е незабавна пауза за ограничаване на загубите.`,
         platform: campaign.platform,
+        metaPlacement: campaign.platform === "Meta" ? campaign.metaPlacement : undefined,
         campaignId: campaign.id,
         actionType: "PAUSE",
         type: "SCALING_STRATEGY",
@@ -61,6 +64,7 @@ export function buildHeuristicActions(
           2
         )} > 3.0: сигнал за creative fatigue и спад в CTR.`,
         platform: "Meta",
+        metaPlacement: campaign.metaPlacement,
         campaignId: campaign.id,
         type: "CREATIVE_FATIGUE"
       });

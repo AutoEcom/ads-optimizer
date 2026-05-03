@@ -3,6 +3,8 @@ import { CampaignMetrics } from "@/types";
 export type AdsPlatformData = {
   campaigns: CampaignMetrics[];
   currencyCode: string;
+  /** Разход на акаунт-ниво (Meta insights / сума Google), last_30d. */
+  totalSpend?: number;
 };
 
 export type AdsPlatformError = Error & {
@@ -15,6 +17,7 @@ export async function fetchAdsPlatformData(url: string): Promise<AdsPlatformData
   const payload = (await response.json()) as {
     campaigns?: CampaignMetrics[];
     currencyCode?: string;
+    totalSpend?: number;
     error?: string;
     code?: string;
   };
@@ -24,7 +27,8 @@ export async function fetchAdsPlatformData(url: string): Promise<AdsPlatformData
     if (response.status === 400 || response.status === 401) {
       return {
         campaigns: [],
-        currencyCode: payload.currencyCode ?? "EUR"
+        currencyCode: payload.currencyCode ?? "EUR",
+        totalSpend: typeof payload.totalSpend === "number" ? payload.totalSpend : undefined
       };
     }
 
@@ -36,6 +40,7 @@ export async function fetchAdsPlatformData(url: string): Promise<AdsPlatformData
 
   return {
     campaigns: payload.campaigns ?? [],
-    currencyCode: payload.currencyCode ?? "EUR"
+    currencyCode: payload.currencyCode ?? "EUR",
+    totalSpend: typeof payload.totalSpend === "number" ? payload.totalSpend : undefined
   };
 }

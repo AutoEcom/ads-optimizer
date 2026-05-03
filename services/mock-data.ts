@@ -10,6 +10,7 @@ export const campaigns: CampaignMetrics[] = [
   {
     id: "meta-01",
     platform: "Meta",
+    metaPlacement: "instagram",
     campaignName: "Meta | Пролетна промоция",
     currencyCode: "EUR",
     spend: 420,
@@ -23,6 +24,7 @@ export const campaigns: CampaignMetrics[] = [
   {
     id: "meta-02",
     platform: "Meta",
+    metaPlacement: "facebook",
     campaignName: "Meta | Ремаркетинг 30 дни",
     currencyCode: "EUR",
     spend: 160,

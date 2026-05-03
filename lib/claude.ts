@@ -488,6 +488,24 @@ function trimForHeadline(s: string, max = 72): string {
   return `${s.slice(0, max - 1).trim()}…`;
 }
 
+/** Подравнява platform/metaPlacement с реалните кампании (източник на истина: campaign.platform + metaPlacement). */
+function attachCampaignPlatformTruth(
+  actions: PrioritizedAction[],
+  campaigns: CampaignMetrics[]
+): PrioritizedAction[] {
+  const byId = new Map(campaigns.map((c) => [c.id, c]));
+  return actions.map((a) => {
+    if (!a.campaignId) return a;
+    const c = byId.get(a.campaignId);
+    if (!c) return a;
+    return {
+      ...a,
+      platform: c.platform,
+      metaPlacement: c.platform === "Meta" ? c.metaPlacement : undefined
+    };
+  });
+}
+
 export async function createHealthAudit(args: {
   campaigns: CampaignMetrics[];
   targetCpa: number;
@@ -507,7 +525,7 @@ export async function createHealthAudit(args: {
         killCount: killList.length,
         actionCount: heuristicActions.length
       }),
-      prioritizedActions: heuristicActions.slice(0, 6),
+      prioritizedActions: attachCampaignPlatformTruth(heuristicActions.slice(0, 6), campaigns),
       killList
     };
   }
@@ -545,7 +563,7 @@ export async function createHealthAudit(args: {
       killCount: killList.length,
       actionCount: merged.length
     }),
-    prioritizedActions: merged.slice(0, 8),
+    prioritizedActions: attachCampaignPlatformTruth(merged.slice(0, 8), campaigns),
     killList
   };
 }
@@ -666,7 +684,21 @@ async function runSubAgentAudit(args: {
 }
 
 function normalizePlatform(value?: string): "Meta" | "Google" | "Общо" {
-  if (value === "Meta" || value === "Google" || value === "Общо") return value;
+  if (!value) return "Общо";
+  const v = value.trim();
+  if (v === "Meta" || v === "Google" || v === "Общо") return v;
+  const lower = v.toLowerCase();
+  if (lower.includes("google") || lower === "gads" || lower === "google ads") return "Google";
+  if (
+    lower.includes("facebook") ||
+    lower.includes("instagram") ||
+    lower === "meta" ||
+    lower.includes("fb") ||
+    lower.includes("ig ads") ||
+    lower.includes("meta ads")
+  ) {
+    return "Meta";
+  }
   return "Общо";
 }
 

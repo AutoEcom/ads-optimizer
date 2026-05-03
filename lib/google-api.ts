@@ -26,11 +26,11 @@ export async function fetchGoogleCampaigns(
   accessToken: string,
   customerId: string,
   targetCpa: number
-): Promise<{ campaigns: CampaignMetrics[]; currencyCode: string }> {
+): Promise<{ campaigns: CampaignMetrics[]; currencyCode: string; totalSpend: number }> {
   const developerToken = process.env.GOOGLE_ADS_DEVELOPER_TOKEN;
   if (!developerToken) {
     console.warn("[Google Ads] Липсва GOOGLE_ADS_DEVELOPER_TOKEN. Връщаме празни кампании.");
-    return { campaigns: [], currencyCode: "EUR" };
+    return { campaigns: [], currencyCode: "EUR", totalSpend: 0 };
   }
 
   const normalizedCustomerId = customerId.replace(/-/g, "");
@@ -80,39 +80,93 @@ export async function fetchGoogleCampaigns(
   const rows = payload.flatMap((chunk) => chunk.results ?? []);
   const currencyCode = rows[0]?.customer?.currencyCode ?? "EUR";
 
-  const campaigns = rows
-    .filter((row) => row.campaign?.id && row.campaign?.name)
-    .map((row) => {
-      const spend = Number(row.metrics?.costMicros ?? 0) / 1_000_000;
-      const conversions = Number(row.metrics?.conversions ?? 0);
-      const cpa = conversions > 0 ? spend / conversions : 0;
-      const conversionsValue = Number(row.metrics?.conversionsValue ?? 0);
-      const roas = spend > 0 ? conversionsValue / spend : 0;
-      const impressionShareRaw = row.metrics?.searchImpressionShare;
-      const impressionShare =
-        typeof impressionShareRaw === "number"
-          ? Number((impressionShareRaw * 100).toFixed(1))
-          : Number((Math.min(95, Math.max(25, 35 + conversions * 4)) + 0.1).toFixed(1));
-      const searchTerms = buildMockSearchTerms(row.campaign?.name);
+  type Agg = {
+    id: string;
+    name: string;
+    spend: number;
+    conversions: number;
+    conversionsValue: number;
+    impressions: number;
+    ctrWeighted: number;
+    impressionShareSamples: number[];
+  };
 
-      return {
-        id: String(row.campaign?.id),
-        platform: "Google",
-        campaignName: row.campaign?.name ?? "Без име",
-        currencyCode,
-        spend: Number(spend.toFixed(2)),
+  const aggById = new Map<string, Agg>();
+
+  for (const row of rows) {
+    const id = row.campaign?.id != null ? String(row.campaign.id) : "";
+    const name = row.campaign?.name;
+    if (!id || !name) continue;
+
+    const spend = Number(row.metrics?.costMicros ?? 0) / 1_000_000;
+    const conversions = Number(row.metrics?.conversions ?? 0);
+    const conversionsValue = Number(row.metrics?.conversionsValue ?? 0);
+    const impressions = Number(row.metrics?.impressions ?? 0);
+    const ctr = Number(row.metrics?.ctr ?? 0);
+    const impressionShareRaw = row.metrics?.searchImpressionShare;
+
+    const prev = aggById.get(id);
+    if (!prev) {
+      aggById.set(id, {
+        id,
+        name,
+        spend,
         conversions,
-        cpa: Number(cpa.toFixed(2)),
-        roas: Number(roas.toFixed(2)),
-        ctr: Number(((row.metrics?.ctr ?? 0) * 100).toFixed(2)),
-        impressions: Number(row.metrics?.impressions ?? 0),
-        impressionShare,
-        searchTerms,
-        targetCpa
-      } satisfies CampaignMetrics;
-    });
+        conversionsValue,
+        impressions,
+        ctrWeighted: ctr * impressions,
+        impressionShareSamples:
+          typeof impressionShareRaw === "number" ? [impressionShareRaw * 100] : []
+      });
+    } else {
+      prev.spend += spend;
+      prev.conversions += conversions;
+      prev.conversionsValue += conversionsValue;
+      prev.impressions += impressions;
+      prev.ctrWeighted += ctr * impressions;
+      if (typeof impressionShareRaw === "number") {
+        prev.impressionShareSamples.push(impressionShareRaw * 100);
+      }
+    }
+  }
 
-  return { campaigns, currencyCode };
+  const campaigns = Array.from(aggById.values()).map((a) => {
+    const spend = Number(a.spend.toFixed(2));
+    const conversions = a.conversions;
+    const cpa = conversions > 0 ? spend / conversions : 0;
+    const roas = spend > 0 ? a.conversionsValue / spend : 0;
+    const ctrPct =
+      a.impressions > 0 ? Number(((a.ctrWeighted / a.impressions) * 100).toFixed(2)) : 0;
+    const impressionShare =
+      a.impressionShareSamples.length > 0
+        ? Number(
+            (
+              a.impressionShareSamples.reduce((s, v) => s + v, 0) / a.impressionShareSamples.length
+            ).toFixed(1)
+          )
+        : Number((Math.min(95, Math.max(25, 35 + conversions * 4)) + 0.1).toFixed(1));
+    const searchTerms = buildMockSearchTerms(a.name);
+
+    return {
+      id: a.id,
+      platform: "Google",
+      campaignName: a.name,
+      currencyCode,
+      spend,
+      conversions,
+      cpa: Number(cpa.toFixed(2)),
+      roas: Number(roas.toFixed(2)),
+      ctr: ctrPct,
+      impressions: a.impressions,
+      impressionShare,
+      searchTerms,
+      targetCpa
+    } satisfies CampaignMetrics;
+  });
+
+  const totalSpend = Number(campaigns.reduce((sum, c) => sum + c.spend, 0).toFixed(2));
+
+  return { campaigns, currencyCode, totalSpend };
 }
 
 function buildMockSearchTerms(campaignName?: string) {

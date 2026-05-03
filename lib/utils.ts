@@ -13,3 +13,13 @@ export function formatCurrency(value: number, currencyCode = "EUR", locale = "bg
     maximumFractionDigits: 2
   }).format(value);
 }
+
+/** Латински формат на валутата (напр. USD като „$“, без кирилски съкращения като „щ.д.“). */
+export function formatCurrencyLatin(value: number, currencyCode = "EUR") {
+  return new Intl.NumberFormat("en-GB", {
+    style: "currency",
+    currency: currencyCode,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(value);
+}

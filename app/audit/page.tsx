@@ -16,6 +16,11 @@ import {
 } from "lucide-react";
 
 import { TypewriterInsight } from "@/components/ai/typewriter-insight";
+import { PrioritizedActionAlert } from "@/components/ads/prioritized-action-alert";
+import {
+  CampaignPlatformGlyph,
+  ImpactScorePill
+} from "@/components/ads/platform-icons";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   AlertDialog,
@@ -46,6 +51,7 @@ import {
 } from "@/hooks/use-ad-platform-connection";
 import { useToast } from "@/hooks/use-toast";
 import { fetchAdsPlatformData } from "@/lib/client-ads";
+import { formatSlashDatesToBulgarian } from "@/lib/format-insight-text";
 import { cn, formatCurrency } from "@/lib/utils";
 import { executeCampaignAction, runDeepAudit, runHealthAudit } from "@/services/ai-service";
 import { fetchAiStrategyCache } from "@/services/ai-strategy-cache-service";
@@ -218,6 +224,13 @@ export default function AuditPage() {
     new Set((healthAudit?.prioritizedActions ?? []).map((action) => action.type).filter(Boolean))
   ) as SkillType[];
 
+  const budgetSufficiencyAlertCount = useMemo(
+    () =>
+      (healthAudit?.prioritizedActions ?? []).filter((action) => action.type === "BUDGET_SUFFICIENCY").length,
+    [healthAudit?.prioritizedActions]
+  );
+  const pulseBudgetSufficiency = budgetSufficiencyAlertCount > 0;
+
   const campaignsLoading = hasLinkedAdAccounts && (isMetaLoading || isGoogleLoading);
   const showAuditBusyOverlay = (hasLinkedAdAccounts && fetchingCachedAudit && !healthAudit) || loadingHealth;
 
@@ -318,57 +331,70 @@ export default function AuditPage() {
                     {activatedSkillTypes.map((skillType) => {
                       const skill = SKILL_BADGE_MAP[skillType];
                       const Icon = skill.icon;
+                      const isBudget = skillType === "BUDGET_SUFFICIENCY";
                       return (
                         <span
                           key={skillType}
-                          className="inline-flex items-center gap-1 rounded-full border border-teal-400/30 bg-teal-500/10 px-3 py-1 text-xs text-teal-200 shadow-[0_0_14px_rgba(45,212,191,0.25)]"
+                          className={cn(
+                            "inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs text-teal-200",
+                            isBudget
+                              ? "border-teal-300/50 bg-teal-500/20 font-medium shadow-[0_0_18px_rgba(45,212,191,0.35)]"
+                              : "border-teal-400/30 bg-teal-500/10 shadow-[0_0_14px_rgba(45,212,191,0.25)]",
+                            isBudget && pulseBudgetSufficiency ? "animate-skill-pulse" : null
+                          )}
                         >
                           <Icon className="h-3.5 w-3.5" />
                           {skill.label}
+                          {isBudget && budgetSufficiencyAlertCount > 0 ? (
+                            <span className="tabular-nums text-teal-100/90">({budgetSufficiencyAlertCount})</span>
+                          ) : null}
                         </span>
                       );
                     })}
                   </div>
                 </div>
               ) : null}
-              {(healthAudit?.prioritizedActions ?? []).map((action) => (
-                <Alert key={action.task}>
-                  <AlertTitle>
-                    [{action.platform}] Impact {action.impactScore}
-                  </AlertTitle>
-                  <AlertDescription className="flex items-start justify-between gap-3">
-                    <div className="space-y-2">
-                      <TypewriterInsight text={`${action.task}: ${action.reason}`} />
-                      <div className="flex flex-wrap gap-2">
-                        {action.type ? (
-                          <span className="inline-flex items-center gap-1 rounded-full border border-sky-400/30 bg-sky-400/10 px-2.5 py-1 text-xs text-sky-200">
-                            <BadgeCheck className="h-3.5 w-3.5" />
-                            {SKILL_BADGE_MAP[action.type].label}
-                          </span>
-                        ) : null}
-                        {action.isKillRule ? (
-                          <span className="inline-flex items-center gap-1 rounded-full border border-rose-400/40 bg-rose-500/10 px-2.5 py-1 text-xs text-rose-200">
-                            <ShieldAlert className="h-3.5 w-3.5" />
-                            3x Kill Rule
-                          </span>
-                        ) : null}
-                      </div>
+              {(healthAudit?.prioritizedActions ?? []).map((action, idx) => (
+                <PrioritizedActionAlert
+                  key={`${action.campaignId ?? "na"}-${action.type ?? "na"}-${idx}`}
+                  action={action}
+                  campaign={
+                    action.campaignId
+                      ? (allCampaigns.find((item) => item.id === action.campaignId) ?? null)
+                      : null
+                  }
+                  targetCpa={20}
+                  auditSnapshotReady={!loadingHealth}
+                  footer={
+                    <div className="flex flex-wrap items-center gap-2">
+                      {action.type ? (
+                        <span className="inline-flex items-center gap-1 rounded-full border border-sky-400/30 bg-sky-400/10 px-2.5 py-1 text-xs text-sky-200">
+                          <BadgeCheck className="h-3.5 w-3.5" />
+                          {SKILL_BADGE_MAP[action.type].label}
+                        </span>
+                      ) : null}
+                      {action.isKillRule ? (
+                        <span className="inline-flex items-center gap-1 rounded-full border border-rose-400/40 bg-rose-500/10 px-2.5 py-1 text-xs text-rose-200">
+                          <ShieldAlert className="h-3.5 w-3.5" />
+                          3x Kill Rule
+                        </span>
+                      ) : null}
+                      {action.actionType === "PAUSE" && action.campaignId ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            const campaign = allCampaigns.find((item) => item.id === action.campaignId);
+                            if (!campaign) return;
+                            setPendingExecution([campaign]);
+                          }}
+                        >
+                          Изпълни
+                        </Button>
+                      ) : null}
                     </div>
-                    {action.actionType === "PAUSE" && action.campaignId ? (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => {
-                          const campaign = allCampaigns.find((item) => item.id === action.campaignId);
-                          if (!campaign) return;
-                          setPendingExecution([campaign]);
-                        }}
-                      >
-                        Изпълни
-                      </Button>
-                    ) : null}
-                  </AlertDescription>
-                </Alert>
+                  }
+                />
               ))}
               {killCampaigns.length > 0 ? (
                 <Button
@@ -584,9 +610,13 @@ function CampaignTable({
             <Alert key={campaign.id}>
               <AlertTitle>AI одит: {campaign.campaignName}</AlertTitle>
               <AlertDescription>
-                {insight.prioritizedActions.slice(0, 3).map((action) => (
-                  <p key={action.task}>
-                    <TypewriterInsight text={`${action.task} (${action.impactScore})`} />
+                {insight.prioritizedActions.slice(0, 3).map((action, i) => (
+                  <p key={`${action.task}-${i}`} className="flex flex-wrap items-center gap-2">
+                    {action.platform !== "Общо" ? (
+                      <CampaignPlatformGlyph platform={action.platform} metaPlacement={action.metaPlacement} />
+                    ) : null}
+                    <ImpactScorePill score={action.impactScore} label="Въздействие" />
+                    <TypewriterInsight text={formatSlashDatesToBulgarian(action.task)} />
                   </p>
                 ))}
               </AlertDescription>
