@@ -1,33 +1,17 @@
 "use client";
 
-import Link from "next/link";
 import { motion } from "framer-motion";
 import { Activity, BadgeCheck, Crosshair, Radar, Search, ShieldAlert, Target, Zap } from "lucide-react";
 import { ReactNode } from "react";
 
+import { LandingAuthHeader } from "@/components/marketing/landing-auth-header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { WaitlistForm } from "@/components/marketing/waitlist-form";
 
 export function LandingPage() {
   return (
     <main className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-foreground">
-      <header className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-5">
-        <p className="text-lg font-semibold text-teal-300">AdGuard AI</p>
-        <div className="flex flex-wrap items-center gap-2">
-          <Link
-            href="/dashboard"
-            className="rounded-md border border-teal-500/30 bg-teal-500/10 px-3 py-2 text-sm text-teal-200 transition hover:bg-teal-500/20"
-          >
-            Табло
-          </Link>
-          <Link
-            href="/auth"
-            className="rounded-md border border-border/70 px-3 py-2 text-sm text-muted-foreground transition hover:bg-teal-500/10 hover:text-teal-200"
-          >
-            Вход
-          </Link>
-        </div>
-      </header>
+      <LandingAuthHeader />
 
       <section className="mx-auto grid max-w-6xl gap-6 px-4 pb-8 pt-6 lg:grid-cols-[1.1fr_1fr]">
         <motion.div
