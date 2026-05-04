@@ -3,3 +3,6 @@ node_modules
 out
 .env.local
 supabase/.temp/
+
+# TypeScript incremental build cache (local only)
+tsconfig.tsbuildinfo
