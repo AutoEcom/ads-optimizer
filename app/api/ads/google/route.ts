@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { getAdPlatformTokenRow } from "@/lib/ad-platform-token-server";
 import { fetchGoogleCampaigns } from "@/lib/google-api";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
@@ -14,7 +15,7 @@ export async function GET() {
       return NextResponse.json({ error: "Няма активна сесия." }, { status: 401 });
     }
 
-    const tokenResult = await getTokenRowWithCompat(supabase, user.id, "Google");
+    const tokenResult = await getAdPlatformTokenRow(supabase, user.id, "Google");
     if (tokenResult.error || !tokenResult.accessToken || !tokenResult.accountId) {
       return NextResponse.json(
         { error: "Моля, въведете валиден Google Token в настройките." },
@@ -50,43 +51,3 @@ export async function GET() {
   }
 }
 
-async function getTokenRowWithCompat(
-  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
-  userId: string,
-  platform: "Meta" | "Google"
-) {
-  const primary = await supabase
-    .from("ad_platform_tokens")
-    .select("access_token,ad_account_id")
-    .eq("user_id", userId)
-    .eq("platform", platform)
-    .eq("is_active", true)
-    .maybeSingle();
-
-  if (!isMissingAdAccountColumnError(primary.error)) {
-    return {
-      accessToken: primary.data?.access_token ?? null,
-      accountId: primary.data?.ad_account_id ?? null,
-      error: primary.error
-    };
-  }
-
-  const legacy = await supabase
-    .from("ad_platform_tokens")
-    .select("access_token,account_id")
-    .eq("user_id", userId)
-    .eq("platform", platform)
-    .eq("is_active", true)
-    .maybeSingle();
-
-  return {
-    accessToken: legacy.data?.access_token ?? null,
-    accountId: legacy.data?.account_id ?? null,
-    error: legacy.error
-  };
-}
-
-function isMissingAdAccountColumnError(error: { message?: string } | null) {
-  const message = error?.message ?? "";
-  return message.includes("ad_account_id") && message.includes("schema cache");
-}

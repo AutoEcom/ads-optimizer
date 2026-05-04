@@ -52,6 +52,19 @@ export type AuditInsight = {
   killList: KillListItem[];
 };
 
+export type ExecutableMetaToolName = "adjust_budget" | "pause_campaign" | "rename_campaign";
+
+/** Meta MCP: изпълним инструмент, върнат от Claude под поле `executable_tool`. */
+export type ExecutableMetaTool = {
+  name: ExecutableMetaToolName;
+  parameters: {
+    campaign_id: string;
+    [key: string]: unknown;
+  };
+  /** Защо AI препоръчва извикване на инструмента. */
+  explanation: string;
+};
+
 export type PrioritizedAction = {
   task: string;
   impactScore: number;
@@ -63,6 +76,11 @@ export type PrioritizedAction = {
   actionType?: "PAUSE" | "ACTIVATE";
   type?: SkillType;
   isKillRule?: boolean;
+  /** Когато препоръката съвпада с Meta MCP инструмент — пази се в ai_strategy_cache.priority_actions. */
+  executable_tool?: ExecutableMetaTool;
+  /** Опционално от AI одит за по-точен UI (иначе се ползва кампанията). */
+  currentCpa?: number;
+  targetCpa?: number;
 };
 
 export type SkillType =

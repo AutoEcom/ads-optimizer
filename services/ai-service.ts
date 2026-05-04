@@ -1,5 +1,6 @@
-import { AdVariation, AuditInsight, CampaignMetrics } from "@/types";
+import { sanitizeAuditInsightMcp } from "@/lib/executable-meta-tool";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import { AdVariation, AuditInsight, CampaignMetrics } from "@/types";
 import { saveAiStrategyCache } from "@/services/ai-strategy-cache-service";
 import { PLAN_LIMITS } from "@/services/profile-service";
 
@@ -78,7 +79,7 @@ export async function runHealthAudit(
   if (!response.ok) {
     throw new Error("Неуспешен AI health одит.");
   }
-  const result = (await response.json()) as AuditInsight;
+  const result = sanitizeAuditInsightMcp((await response.json()) as AuditInsight);
 
   await saveAiStrategyCache(result);
 

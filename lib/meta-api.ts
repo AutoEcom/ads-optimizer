@@ -21,6 +21,125 @@ type MetaInsights = {
 
 const META_API_VERSION = process.env.META_MARKETING_API_VERSION ?? "v21.0";
 
+type MetaGraphErrorBody = {
+  error?: { message?: string; error_user_msg?: string; error_user_title?: string; code?: number };
+};
+
+export async function readMetaGraphFailureMessage(response: Response): Promise<string> {
+  try {
+    const j = (await response.clone().json()) as MetaGraphErrorBody;
+    const m = j.error?.error_user_msg ?? j.error?.message;
+    if (m) return m;
+  } catch {
+    // ignore JSON parse errors
+  }
+  return `Meta Graph API грешка (HTTP ${response.status}).`;
+}
+
+/** Нормализира ad account id към вид act_XXX за сравнение. */
+export function normalizeMetaAdAccountId(id: string): string {
+  const t = id.trim();
+  if (t.startsWith("act_")) return t;
+  return `act_${t.replace(/^act_/, "")}`;
+}
+
+export function metaAdAccountsMatch(userAdAccountId: string, campaignAccountId: string | null): boolean {
+  if (!campaignAccountId) return false;
+  return normalizeMetaAdAccountId(userAdAccountId) === normalizeMetaAdAccountId(campaignAccountId);
+}
+
+/** Връща account_id на кампанията (act_...) за проверка срещу свързания акаунт на потребителя. */
+export async function fetchCampaignAdAccountId(
+  accessToken: string,
+  campaignId: string
+): Promise<{ accountId: string | null; errorMessage?: string }> {
+  const url = new URL(`https://graph.facebook.com/${META_API_VERSION}/${campaignId}`);
+  url.searchParams.set("fields", "account_id");
+  url.searchParams.set("access_token", accessToken);
+
+  const res = await fetch(url.toString(), { cache: "no-store" });
+  if (res.status === 401) {
+    const error = new Error("TOKEN_EXPIRED");
+    (error as Error & { status?: number }).status = 401;
+    throw error;
+  }
+  if (!res.ok) {
+    return { accountId: null, errorMessage: await readMetaGraphFailureMessage(res) };
+  }
+  const json = (await res.json()) as { account_id?: string; error?: MetaGraphErrorBody["error"] };
+  if (json.error?.message) {
+    return { accountId: null, errorMessage: json.error.error_user_msg ?? json.error.message };
+  }
+  const aid = json.account_id != null ? String(json.account_id) : null;
+  return { accountId: aid };
+}
+
+/**
+ * Задава дневен бюджет на кампанията (Graph `daily_budget` в минимални единици на валутата на акаунта, напр. центове за EUR).
+ * @param dailyBudgetMajor — сума в основна валута (напр. 25.50 EUR).
+ */
+export async function updateCampaignDailyBudget(
+  accessToken: string,
+  campaignId: string,
+  dailyBudgetMajor: number
+): Promise<void> {
+  if (!Number.isFinite(dailyBudgetMajor) || dailyBudgetMajor <= 0) {
+    throw new Error("Невалиден дневен бюджет. Очаква се положително число в основна валута на акаунта.");
+  }
+  const minor = Math.max(1, Math.round(dailyBudgetMajor * 100));
+  const updateUrl = new URL(`https://graph.facebook.com/${META_API_VERSION}/${campaignId}`);
+  const payload = new URLSearchParams();
+  payload.set("daily_budget", String(minor));
+  payload.set("access_token", accessToken);
+
+  const response = await fetch(updateUrl.toString(), {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: payload.toString(),
+    cache: "no-store"
+  });
+
+  if (response.status === 401) {
+    const error = new Error("TOKEN_EXPIRED");
+    (error as Error & { status?: number }).status = 401;
+    throw error;
+  }
+  if (!response.ok) {
+    throw new Error(await readMetaGraphFailureMessage(response));
+  }
+}
+
+export async function updateCampaignNameMeta(
+  accessToken: string,
+  campaignId: string,
+  name: string
+): Promise<void> {
+  const trimmed = name.trim();
+  if (!trimmed) {
+    throw new Error("Името на кампанията не може да е празно.");
+  }
+  const updateUrl = new URL(`https://graph.facebook.com/${META_API_VERSION}/${campaignId}`);
+  const payload = new URLSearchParams();
+  payload.set("name", trimmed);
+  payload.set("access_token", accessToken);
+
+  const response = await fetch(updateUrl.toString(), {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: payload.toString(),
+    cache: "no-store"
+  });
+
+  if (response.status === 401) {
+    const error = new Error("TOKEN_EXPIRED");
+    (error as Error & { status?: number }).status = 401;
+    throw error;
+  }
+  if (!response.ok) {
+    throw new Error(await readMetaGraphFailureMessage(response));
+  }
+}
+
 async function fetchMetaAccountTotalSpend(normalizedAccount: string, accessToken: string): Promise<number> {
   const url = new URL(`https://graph.facebook.com/${META_API_VERSION}/${normalizedAccount}/insights`);
   url.searchParams.set("fields", "spend");
@@ -166,7 +285,7 @@ export async function updateCampaignStatus(
   }
 
   if (!response.ok) {
-    throw new Error("Неуспешна промяна на Meta кампания.");
+    throw new Error(await readMetaGraphFailureMessage(response));
   }
 }
 

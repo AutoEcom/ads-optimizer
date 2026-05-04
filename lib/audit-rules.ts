@@ -1,4 +1,4 @@
-import { CampaignMetrics, KillListItem, PrioritizedAction } from "@/types";
+import { type ExecutableMetaTool, CampaignMetrics, KillListItem, PrioritizedAction } from "@/types";
 
 const KILL_RULE_MULTIPLIER = 3;
 
@@ -27,6 +27,16 @@ export function buildHeuristicActions(
   for (const campaign of campaigns) {
     const hasLowBudget = campaign.spend < targetCpa * 5;
     if (hasLowBudget) {
+      const suggestedDaily = Math.round(targetCpa * 5 * 100) / 100;
+      const metaBudgetTool: ExecutableMetaTool | undefined =
+        campaign.platform === "Meta"
+          ? {
+              name: "adjust_budget",
+              parameters: { campaign_id: campaign.id, new_budget: suggestedDaily },
+              explanation:
+                "Евристика: дневният бюджет е под 5× целеви CPA; предложен минимум за стабилен learning сигнал."
+            }
+          : undefined;
       actions.push({
         task: `Увеличи бюджет или консолидирай ${campaign.campaignName}`,
         impactScore: 72,
@@ -36,11 +46,20 @@ export function buildHeuristicActions(
         platform: campaign.platform,
         metaPlacement: campaign.platform === "Meta" ? campaign.metaPlacement : undefined,
         campaignId: campaign.id,
-        type: "BUDGET_SUFFICIENCY"
+        type: "BUDGET_SUFFICIENCY",
+        executable_tool: metaBudgetTool
       });
     }
 
     if (campaign.cpa > targetCpa * KILL_RULE_MULTIPLIER) {
+      const metaPauseTool: ExecutableMetaTool | undefined =
+        campaign.platform === "Meta"
+          ? {
+              name: "pause_campaign",
+              parameters: { campaign_id: campaign.id },
+              explanation: "Евристика: CPA над 3× целевия — незабавна пауза за ограничаване на загубите."
+            }
+          : undefined;
       actions.push({
         task: `Спри кампания ${campaign.campaignName}`,
         impactScore: 96,
@@ -52,7 +71,8 @@ export function buildHeuristicActions(
         campaignId: campaign.id,
         actionType: "PAUSE",
         type: "SCALING_STRATEGY",
-        isKillRule: true
+        isKillRule: true,
+        executable_tool: metaPauseTool
       });
     }
 

@@ -1,5 +1,6 @@
-import { AdVariation, AuditInsight, CampaignMetrics, PrioritizedAction, SkillType } from "@/types";
 import { buildHeuristicActions, buildKillList, computeHealthScore } from "@/lib/audit-rules";
+import { parseExecutableToolFromAgentJson, sanitizeAuditInsightMcp } from "@/lib/executable-meta-tool";
+import { AdVariation, AuditInsight, CampaignMetrics, PrioritizedAction, SkillType } from "@/types";
 
 /** Аудит / sub-agents — най-мощният слой (според Workbench). Алтернатива: claude-haiku-4-5-20251001 за скорост. */
 const CLAUDE_MODEL = "claude-opus-4-7";
@@ -518,7 +519,7 @@ export async function createHealthAudit(args: {
   const apiKey = anthropicApiKeyFromEnv();
 
   if (!apiKey) {
-    return {
+    return sanitizeAuditInsightMcp({
       healthScore: computeHealthScore({
         campaigns,
         targetCpa,
@@ -527,7 +528,7 @@ export async function createHealthAudit(args: {
       }),
       prioritizedActions: attachCampaignPlatformTruth(heuristicActions.slice(0, 6), campaigns),
       killList
-    };
+    });
   }
 
   const domains = [
@@ -556,7 +557,7 @@ export async function createHealthAudit(args: {
     (a, b) => b.impactScore - a.impactScore
   );
 
-  return {
+  return sanitizeAuditInsightMcp({
     healthScore: computeHealthScore({
       campaigns,
       targetCpa,
@@ -565,7 +566,7 @@ export async function createHealthAudit(args: {
     }),
     prioritizedActions: attachCampaignPlatformTruth(merged.slice(0, 8), campaigns),
     killList
-  };
+  });
 }
 
 async function runSubAgentAudit(args: {
@@ -581,7 +582,8 @@ async function runSubAgentAudit(args: {
     Budget:
       "Meta: приложи Scaling Roadmap (поетапно вдигане на бюджет при стабилен CPA/ROAS). " +
       "Google: анализирай Budget Sufficiency (дали бюджетът ограничава Impression Share и конверсии). " +
-      "Използвай type: SCALING_STRATEGY или BUDGET_SUFFICIENCY.",
+      "Използвай type: SCALING_STRATEGY или BUDGET_SUFFICIENCY. " +
+      "Budget agent / Meta: при конкретна препоръка за дневен бюджет ЗАДЪЛЖИТЕЛНО включи executable_tool с name adjust_budget, parameters.campaign_id и parameters.new_budget (положително число).",
     Creative:
       "Meta: провери Creative Fatigue и hook стратегия при висока frequency/нисък CTR. " +
       "Google: провери Ad Copy Relevance и Quality сигналите. " +
@@ -597,11 +599,13 @@ async function runSubAgentAudit(args: {
     Bidding:
       "Meta: търси Auction Overlap/вътрешна конкуренция между ad sets. " +
       "Google: провери Bid Strategy Auditor (tCPA/tROAS mismatch). " +
-      "Използвай type: AUCTION_OVERLAP или BID_STRATEGY_AUDITOR.",
+      "Използвай type: AUCTION_OVERLAP или BID_STRATEGY_AUDITOR. " +
+      "Performance / Meta: ако препоръчаш пауза на кампания, включи executable_tool с name pause_campaign.",
     Strategy:
       "Meta: провери Funnel Alignment и предложи Audience Builder (Interest/LAL) разширения. " +
       "Google: направи Keyword Mining от search terms и funnel fit. " +
-      "Използвай type: FUNNEL_ALIGNMENT, AUDIENCE_BUILDER или KEYWORD_MINING."
+      "Използвай type: FUNNEL_ALIGNMENT, AUDIENCE_BUILDER или KEYWORD_MINING. " +
+      "Performance agent / Meta: при препоръка за спиране/пауза заради загуби или 3x Kill риск включи executable_tool с name pause_campaign."
   };
 
   const url = anthropicMessagesUrl();
@@ -616,6 +620,7 @@ async function runSubAgentAudit(args: {
       max_tokens: 650,
       temperature: 0.1,
       system:
+        META_MCP_ORCHESTRATOR_RULES +
         "Ти си Senior Media Buyer sub-agent. Работиш само по даден домейн и връщаш валиден JSON масив. " +
         "Фокус: рентабилност, спиране на money leaks, директен тон. Отговаряй само на български. " +
         "Критично правило: ако кампанията има под 500 импресии, маркирай я като Learning и препоръчай изчакване 48 часа, без драстични промени. " +
@@ -629,11 +634,16 @@ async function runSubAgentAudit(args: {
               domain,
               domainPlaybook: domainPlaybook[domain],
               requiredOutput:
-                "Върни JSON масив max 3 обекта: { task, impactScore, reason, platform, type, campaignId?, actionType?, isKillRule? }.",
+                "Върни JSON масив max 3 обекта. Всеки обект: { task, impactScore, reason, platform, type, campaignId?, actionType?, isKillRule?, executable_tool? }. " +
+                "campaignId: задължително копирай от campaigns[].id на съответната кампания, когато препоръката е за конкретна кампания. " +
+                "executable_tool: { name: 'adjust_budget'|'pause_campaign'|'rename_campaign', parameters: { campaign_id (същото като campaignId), new_budget?, new_name? }, explanation }. " +
+                "Ако препоръката съвпада с инструмент по правилата на оркестратора — ЗАДЪЛЖИТЕЛНО попълни executable_tool.",
               context: {
                 targetCpa,
                 targetRoas,
-                businessContext: businessContext ?? "Без допълнителен контекст"
+                businessContext: businessContext ?? "Без допълнителен контекст",
+                campaignIdRule:
+                  "campaigns[].id е Meta/Google campaign id — използвай го 1:1 в campaignId и в executable_tool.parameters.campaign_id за Meta."
               },
               campaigns
             },
@@ -663,21 +673,26 @@ async function runSubAgentAudit(args: {
       campaignId?: string;
       actionType?: "PAUSE" | "ACTIVATE";
       isKillRule?: boolean;
+      executable_tool?: unknown;
     }>;
     if (!Array.isArray(parsed)) return [];
 
     return parsed
       .filter((entry) => entry.task && entry.reason)
-      .map((entry) => ({
-        task: entry.task ?? "",
-        impactScore: Math.max(1, Math.min(100, Number(entry.impactScore ?? 60))),
-        reason: entry.reason ?? "",
-        platform: normalizePlatform(entry.platform),
-        type: normalizeSkillType(entry.type),
-        campaignId: entry.campaignId,
-        actionType: entry.actionType,
-        isKillRule: Boolean(entry.isKillRule)
-      }));
+      .map((entry) => {
+        const tool = parseExecutableToolFromAgentJson(entry.executable_tool);
+        return {
+          task: entry.task ?? "",
+          impactScore: Math.max(1, Math.min(100, Number(entry.impactScore ?? 60))),
+          reason: entry.reason ?? "",
+          platform: normalizePlatform(entry.platform),
+          type: normalizeSkillType(entry.type),
+          campaignId: entry.campaignId,
+          actionType: entry.actionType,
+          isKillRule: Boolean(entry.isKillRule),
+          ...(tool ? { executable_tool: tool } : {})
+        };
+      });
   } catch {
     return [];
   }
@@ -728,7 +743,22 @@ function dedupeActions(actions: PrioritizedAction[]) {
     const existing = map.get(key);
     if (!existing || existing.impactScore < action.impactScore) {
       map.set(key, action);
+    } else if (existing.impactScore === action.impactScore && action.executable_tool && !existing.executable_tool) {
+      map.set(key, { ...existing, executable_tool: action.executable_tool });
     }
   }
   return Array.from(map.values());
 }
+
+/** Оркестратор + Meta MCP: инструкции към всички sub-agents (Claude). */
+const META_MCP_ORCHESTRATOR_RULES =
+  "Оркестрация / Meta MCP: Разполагаш с три изпълними инструмента само за платформа Meta и реални campaign id от входния JSON: " +
+  "adjust_budget (campaign_id + new_budget дневен бюджет в основна валута на акаунта), " +
+  "pause_campaign (campaign_id), rename_campaign (campaign_id + new_name за тест). " +
+  "Критично: ако препоръчаш действие, което директно съответства на някой от тези три инструмента, " +
+  "ЗАДЪЛЖИТЕЛНО включи в същия JSON обект от масива поле executable_tool с точна структура: " +
+  '{ "executable_tool": { "name": "adjust_budget"|"pause_campaign"|"rename_campaign", ' +
+  '"parameters": { "campaign_id": "<копирай точно от campaigns[].id>", "new_budget"?: number, "new_name"?: string }, ' +
+  '"explanation": "кратко защо извикваш инструмента" } }. ' +
+  "За Google или общи препоръки без тези инструменти — пропусни executable_tool или го задай на null. " +
+  "campaign_id в parameters трябва да съвпада с campaignId на същия обект, когато има campaignId.";

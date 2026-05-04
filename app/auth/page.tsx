@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { Route } from "next";
 import { Eye, EyeOff, Loader2, LogIn, MailCheck, UserPlus, X } from "lucide-react";
@@ -62,10 +62,44 @@ export default function AuthPage() {
     return true;
   };
 
-  async function redirectToDashboard() {
-    await router.push(redirectPath);
+  function redirectToDashboard() {
+    router.replace(redirectPath);
     router.refresh();
+    // Fallback при race между client navigation и middleware cookie refresh.
+    setTimeout(() => {
+      if (window.location.pathname !== redirectPath) {
+        window.location.assign(redirectPath);
+      }
+    }, 250);
   }
+
+  useEffect(() => {
+    if (!supabase) return;
+    const client = supabase;
+
+    let cancelled = false;
+    async function redirectIfAlreadyLoggedIn() {
+      const { data } = await client.auth.getSession();
+      if (cancelled) return;
+      if (data.session) {
+        redirectToDashboard();
+      }
+    }
+    void redirectIfAlreadyLoggedIn();
+
+    const {
+      data: { subscription }
+    } = client.auth.onAuthStateChange((event) => {
+      if (event === "SIGNED_IN") {
+        redirectToDashboard();
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      subscription.unsubscribe();
+    };
+  }, [supabase, router]);
 
   const handleSignIn = async () => {
     setAuthFormMode("sign-in");
@@ -95,8 +129,18 @@ export default function AuthPage() {
         return;
       }
 
+      const { data: sessionData } = await supabase.auth.getSession();
+      if (!sessionData.session) {
+        setError("Сесията не можа да се инициализира. Опитай отново.");
+        toast({
+          title: "Грешка при вход",
+          description: "Сесията не можа да се инициализира. Опитай отново."
+        });
+        return;
+      }
+
       toast({ title: "Успешен вход! Пренасочване..." });
-      await redirectToDashboard();
+      redirectToDashboard();
     } catch (err) {
       console.error("[auth] handleSignIn exception:", err);
       const msg =
@@ -146,7 +190,7 @@ export default function AuthPage() {
       }
 
       toast({ title: "Успешен вход! Пренасочване..." });
-      await redirectToDashboard();
+      redirectToDashboard();
     } catch (err) {
       console.error("[auth] handleSignUp exception:", err);
       const msg =

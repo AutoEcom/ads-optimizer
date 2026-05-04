@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Toaster as SonnerToaster } from "sonner";
 import { SidebarShell } from "@/components/layout/sidebar-shell";
 import { Toaster } from "@/components/ui/toaster";
 import "./globals.css";
@@ -18,6 +19,7 @@ export default function RootLayout({
       <body>
         <SidebarShell>{children}</SidebarShell>
         <Toaster />
+        <SonnerToaster richColors position="top-center" theme="dark" />
       </body>
     </html>
   );
