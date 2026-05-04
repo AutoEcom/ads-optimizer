@@ -4,14 +4,46 @@ import useSWR from "swr";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
+type LogAction =
+  | "PAUSE"
+  | "ACTIVATE"
+  | "MCP_ADJUST_BUDGET"
+  | "MCP_PAUSE"
+  | "MCP_RENAME"
+  | string;
+
+type LogDetails = {
+  old_value?: unknown;
+  new_value?: unknown;
+  status?: string;
+} | null;
+
 type LogItem = {
   id: string;
   platform: "Meta" | "Google";
   campaign_name: string;
-  action_taken: "PAUSE" | "ACTIVATE";
+  action_taken: LogAction;
   reason: string;
+  details?: LogDetails;
   created_at: string;
 };
+
+function actionTakenLabelBg(action: LogAction): string {
+  switch (action) {
+    case "PAUSE":
+      return "Пауза";
+    case "ACTIVATE":
+      return "Активиране";
+    case "MCP_ADJUST_BUDGET":
+      return "MCP · бюджет";
+    case "MCP_PAUSE":
+      return "MCP · пауза";
+    case "MCP_RENAME":
+      return "MCP · име";
+    default:
+      return String(action);
+  }
+}
 
 async function fetchLogs(url: string) {
   const response = await fetch(url, { cache: "no-store" });
@@ -26,8 +58,8 @@ export default function HistoryPage() {
     <main className="space-y-4">
       <Card>
         <CardHeader>
-          <CardTitle>Execution History</CardTitle>
-          <CardDescription>Прозрачност за всяко AI действие.</CardDescription>
+          <CardTitle>Лог на действията</CardTitle>
+          <CardDescription>История на изпълненията от таблото, одита и Meta MCP.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-2">
           {error ? <p className="text-sm text-rose-400">Неуспешно зареждане на логовете.</p> : null}
@@ -35,10 +67,32 @@ export default function HistoryPage() {
           {(data?.logs ?? []).map((log) => (
             <div key={log.id} className="rounded-md border border-border/70 p-3">
               <p className="text-sm font-medium">
-                [{log.platform}] {log.campaign_name} {"->"} {log.action_taken}
+                [{log.platform}] {log.campaign_name} → {actionTakenLabelBg(log.action_taken)}
               </p>
-              <p className="text-xs text-muted-foreground">{log.reason}</p>
-              <p className="text-xs text-muted-foreground">
+              <p className="mt-1 text-sm text-foreground/90">{log.reason}</p>
+              {log.details && typeof log.details === "object" ? (
+                <dl className="mt-2 grid gap-1 rounded-md border border-border/50 bg-muted/25 px-2 py-2 text-xs text-muted-foreground">
+                  {"old_value" in log.details && log.details.old_value !== undefined && log.details.old_value !== null ? (
+                    <div className="flex gap-2">
+                      <dt className="shrink-0 font-medium text-foreground/80">Преди:</dt>
+                      <dd className="min-w-0 break-all">{String(log.details.old_value)}</dd>
+                    </div>
+                  ) : null}
+                  {"new_value" in log.details && log.details.new_value !== undefined && log.details.new_value !== null ? (
+                    <div className="flex gap-2">
+                      <dt className="shrink-0 font-medium text-foreground/80">След:</dt>
+                      <dd className="min-w-0 break-all">{String(log.details.new_value)}</dd>
+                    </div>
+                  ) : null}
+                  {log.details.status ? (
+                    <div className="flex gap-2">
+                      <dt className="shrink-0 font-medium text-foreground/80">Статус:</dt>
+                      <dd>{String(log.details.status)}</dd>
+                    </div>
+                  ) : null}
+                </dl>
+              ) : null}
+              <p className="mt-2 text-xs text-muted-foreground">
                 {new Date(log.created_at).toLocaleString("bg-BG")}
               </p>
             </div>

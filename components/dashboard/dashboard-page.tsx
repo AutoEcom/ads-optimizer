@@ -9,6 +9,7 @@ import {
   AlertCircle,
   AlertTriangle,
   Bot,
+  CheckCircle2,
   Eye,
   Loader2,
   Sparkles
@@ -20,7 +21,9 @@ import {
   useAdPlatformConnection
 } from "@/hooks/use-ad-platform-connection";
 import { useToast } from "@/hooks/use-toast";
+import { GroupedActionCard } from "@/components/ads/grouped-action-card";
 import { PrioritizedActionAlert } from "@/components/ads/prioritized-action-alert";
+import { groupActionsByType, isPrioritizedActionGroup } from "@/lib/action-utils";
 import {
   CampaignPlatformGlyph,
   ImpactScorePill,
@@ -220,7 +223,21 @@ export function DashboardPage() {
     return healthAudit.killList.reduce((sum, item) => sum + item.spend, 0);
   }, [healthAudit]);
 
-  const activeAlarmsCount = (healthAudit?.prioritizedActions.length ?? 0) + criticalIssues.length;
+  const prioritizedDisplayList = useMemo(
+    () => groupActionsByType(healthAudit?.prioritizedActions ?? []),
+    [healthAudit?.prioritizedActions]
+  );
+
+  const groupAlertsCount = useMemo(
+    () => prioritizedDisplayList.filter(isPrioritizedActionGroup).length,
+    [prioritizedDisplayList]
+  );
+
+  const activeAlarmsBase = prioritizedDisplayList.length + criticalIssues.length;
+  const activeAlarmsDisplay =
+    groupAlertsCount > 0
+      ? `${activeAlarmsBase} · ${groupAlertsCount === 1 ? "1 група" : `${groupAlertsCount} групи`} оптимизации`
+      : String(activeAlarmsBase);
 
   const connectionStatus = useMemo(() => {
     if (!hasLinkedAdAccounts) return "Няма свързани акаунти";
@@ -507,7 +524,7 @@ export function DashboardPage() {
                 value={formatCurrencyLatin(potentialSavedEur, displayCurrency)}
                 progress={potentialSavedEur > 0 ? 48 : 0}
               />
-              <MetricCard label="Активни аларми" value={`${activeAlarmsCount}`} progress={40} />
+              <MetricCard label="Активни аларми" value={activeAlarmsDisplay} progress={40} />
               <MetricCard
                 label={
                   <span className="inline-flex items-center gap-1">
@@ -563,39 +580,72 @@ export function DashboardPage() {
             <div>
               <p className="text-sm font-medium">Prioritized Action Plan</p>
               <div className="mt-2 space-y-2">
-                {(healthAudit?.prioritizedActions ?? []).slice(0, 5).map((action, idx) => (
-                  <PrioritizedActionAlert
-                    key={`${action.campaignId ?? "na"}-${action.type ?? "na"}-${idx}`}
-                    action={action}
-                    campaign={
-                      action.campaignId
-                        ? (allCampaigns.find((item) => item.id === action.campaignId) ?? null)
-                        : null
-                    }
-                    targetCpa={savedTargets.targetCpa}
-                    auditSnapshotReady={Boolean(healthAudit)}
-                    footer={
-                      action.actionType === "PAUSE" && action.campaignId ? (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => {
-                            const campaign = allCampaigns.find((item) => item.id === action.campaignId);
-                            if (!campaign) return;
-                            queueExecution(campaign, action.reason);
-                          }}
-                        >
-                          Изпълни
-                        </Button>
-                      ) : null
-                    }
-                  />
-                ))}
-                {!healthAudit || healthAudit.prioritizedActions.length === 0 ? (
+                {!healthAudit ? (
                   <p className="text-sm text-muted-foreground">
                     Стартирай Health Audit, за да видиш ranked action plan.
                   </p>
-                ) : null}
+                ) : prioritizedDisplayList.length === 0 ? (
+                  <div className="flex items-start gap-3 rounded-lg border border-emerald-500/35 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">
+                    <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-400" aria-hidden />
+                    <span>Всичко изглежда наред! Няма критични препоръки в момента.</span>
+                  </div>
+                ) : (
+                  prioritizedDisplayList.slice(0, 5).map((item, idx) =>
+                    isPrioritizedActionGroup(item) ? (
+                      <GroupedActionCard
+                        key={`group-${item.type}-${idx}`}
+                        group={item}
+                        getCampaign={(a) =>
+                          a.campaignId ? (allCampaigns.find((c) => c.id === a.campaignId) ?? null) : null
+                        }
+                        targetCpa={savedTargets.targetCpa}
+                        auditSnapshotReady={Boolean(healthAudit)}
+                        childFooter={(a) =>
+                          a.actionType === "PAUSE" && a.campaignId ? (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                const campaign = allCampaigns.find((c) => c.id === a.campaignId);
+                                if (!campaign) return;
+                                queueExecution(campaign, a.reason);
+                              }}
+                            >
+                              Изпълни
+                            </Button>
+                          ) : null
+                        }
+                      />
+                    ) : (
+                      <PrioritizedActionAlert
+                        key={`${item.campaignId ?? "na"}-${item.type ?? "na"}-${idx}`}
+                        action={item}
+                        campaign={
+                          item.campaignId
+                            ? (allCampaigns.find((c) => c.id === item.campaignId) ?? null)
+                            : null
+                        }
+                        targetCpa={savedTargets.targetCpa}
+                        auditSnapshotReady={Boolean(healthAudit)}
+                        footer={
+                          item.actionType === "PAUSE" && item.campaignId ? (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                const campaign = allCampaigns.find((c) => c.id === item.campaignId);
+                                if (!campaign) return;
+                                queueExecution(campaign, item.reason);
+                              }}
+                            >
+                              Изпълни
+                            </Button>
+                          ) : null
+                        }
+                      />
+                    )
+                  )
+                )}
               </div>
             </div>
             <div>

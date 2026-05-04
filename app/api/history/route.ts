@@ -14,7 +14,7 @@ export async function GET() {
 
     const { data, error } = await supabase
       .from("execution_logs")
-      .select("id, platform, campaign_name, action_taken, reason, created_at")
+      .select("id, platform, campaign_name, action_taken, reason, details, created_at")
       .eq("user_id", user.id)
       .order("created_at", { ascending: false })
       .limit(100);

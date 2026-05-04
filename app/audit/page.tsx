@@ -6,6 +6,7 @@ import Link from "next/link";
 import type { Route } from "next";
 import {
   BadgeCheck,
+  CheckCircle2,
   Crosshair,
   Loader2,
   Radar,
@@ -16,7 +17,9 @@ import {
 } from "lucide-react";
 
 import { TypewriterInsight } from "@/components/ai/typewriter-insight";
+import { GroupedActionCard } from "@/components/ads/grouped-action-card";
 import { PrioritizedActionAlert } from "@/components/ads/prioritized-action-alert";
+import { groupActionsByType, isPrioritizedActionGroup } from "@/lib/action-utils";
 import {
   CampaignPlatformGlyph,
   ImpactScorePill
@@ -229,6 +232,10 @@ export default function AuditPage() {
       (healthAudit?.prioritizedActions ?? []).filter((action) => action.type === "BUDGET_SUFFICIENCY").length,
     [healthAudit?.prioritizedActions]
   );
+  const prioritizedDisplayList = useMemo(
+    () => groupActionsByType(healthAudit?.prioritizedActions ?? []),
+    [healthAudit?.prioritizedActions]
+  );
   const pulseBudgetSufficiency = budgetSufficiencyAlertCount > 0;
 
   const campaignsLoading = hasLinkedAdAccounts && (isMetaLoading || isGoogleLoading);
@@ -354,48 +361,100 @@ export default function AuditPage() {
                   </div>
                 </div>
               ) : null}
-              {(healthAudit?.prioritizedActions ?? []).map((action, idx) => (
-                <PrioritizedActionAlert
-                  key={`${action.campaignId ?? "na"}-${action.type ?? "na"}-${idx}`}
-                  action={action}
-                  campaign={
-                    action.campaignId
-                      ? (allCampaigns.find((item) => item.id === action.campaignId) ?? null)
-                      : null
-                  }
-                  targetCpa={20}
-                  auditSnapshotReady={!loadingHealth}
-                  footer={
-                    <div className="flex flex-wrap items-center gap-2">
-                      {action.type ? (
-                        <span className="inline-flex items-center gap-1 rounded-full border border-sky-400/30 bg-sky-400/10 px-2.5 py-1 text-xs text-sky-200">
-                          <BadgeCheck className="h-3.5 w-3.5" />
-                          {SKILL_BADGE_MAP[action.type].label}
-                        </span>
-                      ) : null}
-                      {action.isKillRule ? (
-                        <span className="inline-flex items-center gap-1 rounded-full border border-rose-400/40 bg-rose-500/10 px-2.5 py-1 text-xs text-rose-200">
-                          <ShieldAlert className="h-3.5 w-3.5" />
-                          3x Kill Rule
-                        </span>
-                      ) : null}
-                      {action.actionType === "PAUSE" && action.campaignId ? (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => {
-                            const campaign = allCampaigns.find((item) => item.id === action.campaignId);
-                            if (!campaign) return;
-                            setPendingExecution([campaign]);
-                          }}
-                        >
-                          Изпълни
-                        </Button>
-                      ) : null}
-                    </div>
-                  }
-                />
-              ))}
+              {!healthAudit ? (
+                <p className="text-sm text-muted-foreground">
+                  Стартирай Health Audit, за да видиш AI приоритетите за кампаниите.
+                </p>
+              ) : prioritizedDisplayList.length === 0 ? (
+                <div className="flex items-start gap-3 rounded-lg border border-emerald-500/35 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">
+                  <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-400" aria-hidden />
+                  <span>Всичко изглежда наред! Няма критични препоръки в момента.</span>
+                </div>
+              ) : (
+                prioritizedDisplayList.map((item, idx) =>
+                  isPrioritizedActionGroup(item) ? (
+                    <GroupedActionCard
+                      key={`group-${item.type}-${idx}`}
+                      group={item}
+                      getCampaign={(a) =>
+                        a.campaignId ? (allCampaigns.find((c) => c.id === a.campaignId) ?? null) : null
+                      }
+                      targetCpa={20}
+                      auditSnapshotReady={!loadingHealth}
+                      childFooter={(child) => (
+                        <div className="flex flex-wrap items-center gap-2">
+                          {child.type ? (
+                            <span className="inline-flex items-center gap-1 rounded-full border border-sky-400/30 bg-sky-400/10 px-2.5 py-1 text-xs text-sky-200">
+                              <BadgeCheck className="h-3.5 w-3.5" />
+                              {SKILL_BADGE_MAP[child.type].label}
+                            </span>
+                          ) : null}
+                          {child.isKillRule ? (
+                            <span className="inline-flex items-center gap-1 rounded-full border border-rose-400/40 bg-rose-500/10 px-2.5 py-1 text-xs text-rose-200">
+                              <ShieldAlert className="h-3.5 w-3.5" />
+                              3x Kill Rule
+                            </span>
+                          ) : null}
+                          {child.actionType === "PAUSE" && child.campaignId ? (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                const campaign = allCampaigns.find((c) => c.id === child.campaignId);
+                                if (!campaign) return;
+                                setPendingExecution([campaign]);
+                              }}
+                            >
+                              Изпълни
+                            </Button>
+                          ) : null}
+                        </div>
+                      )}
+                    />
+                  ) : (
+                    <PrioritizedActionAlert
+                      key={`${item.campaignId ?? "na"}-${item.type ?? "na"}-${idx}`}
+                      action={item}
+                      campaign={
+                        item.campaignId
+                          ? (allCampaigns.find((c) => c.id === item.campaignId) ?? null)
+                          : null
+                      }
+                      targetCpa={20}
+                      auditSnapshotReady={!loadingHealth}
+                      footer={
+                        <div className="flex flex-wrap items-center gap-2">
+                          {item.type ? (
+                            <span className="inline-flex items-center gap-1 rounded-full border border-sky-400/30 bg-sky-400/10 px-2.5 py-1 text-xs text-sky-200">
+                              <BadgeCheck className="h-3.5 w-3.5" />
+                              {SKILL_BADGE_MAP[item.type].label}
+                            </span>
+                          ) : null}
+                          {item.isKillRule ? (
+                            <span className="inline-flex items-center gap-1 rounded-full border border-rose-400/40 bg-rose-500/10 px-2.5 py-1 text-xs text-rose-200">
+                              <ShieldAlert className="h-3.5 w-3.5" />
+                              3x Kill Rule
+                            </span>
+                          ) : null}
+                          {item.actionType === "PAUSE" && item.campaignId ? (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                const campaign = allCampaigns.find((c) => c.id === item.campaignId);
+                                if (!campaign) return;
+                                setPendingExecution([campaign]);
+                              }}
+                            >
+                              Изпълни
+                            </Button>
+                          ) : null}
+                        </div>
+                      }
+                    />
+                  )
+                )
+              )}
               {killCampaigns.length > 0 ? (
                 <Button
                   variant="outline"

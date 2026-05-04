@@ -157,8 +157,18 @@ create table if not exists public.execution_logs (
   platform text not null check (platform in ('Meta', 'Google')),
   campaign_id text not null,
   campaign_name text not null,
-  action_taken text not null check (action_taken in ('PAUSE', 'ACTIVATE')),
+  action_taken text not null
+    check (
+      action_taken in (
+        'PAUSE',
+        'ACTIVATE',
+        'MCP_ADJUST_BUDGET',
+        'MCP_PAUSE',
+        'MCP_RENAME'
+      )
+    ),
   reason text not null,
+  details jsonb,
   created_at timestamptz not null default now()
 );
 

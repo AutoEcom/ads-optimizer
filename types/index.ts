@@ -83,6 +83,15 @@ export type PrioritizedAction = {
   targetCpa?: number;
 };
 
+/** Виртуална група от ≥3 препоръки с един и същ `type` (виж `groupActionsByType`). */
+export type PrioritizedActionGroup = {
+  isGroup: true;
+  type: SkillType;
+  children: PrioritizedAction[];
+};
+
+export type PrioritizedActionListItem = PrioritizedAction | PrioritizedActionGroup;
+
 export type SkillType =
   | "SCALING_STRATEGY"
   | "BUDGET_SUFFICIENCY"
