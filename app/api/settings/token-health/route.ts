@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { attachMetaAuthToUrl } from "@/lib/meta-api";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import type { Platform } from "@/types";
 
@@ -8,7 +9,7 @@ const META_API_VERSION = process.env.META_MARKETING_API_VERSION ?? "v21.0";
 async function validateMetaToken(accessToken: string): Promise<boolean> {
   const url = new URL(`https://graph.facebook.com/${META_API_VERSION}/me`);
   url.searchParams.set("fields", "id");
-  url.searchParams.set("access_token", accessToken);
+  attachMetaAuthToUrl(url, accessToken);
   const res = await fetch(url.toString(), { cache: "no-store" });
   return res.ok;
 }

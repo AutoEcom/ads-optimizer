@@ -1,3 +1,5 @@
+import { createHmac } from "node:crypto";
+
 import type { CampaignMetrics, MetaPlacement } from "@/types";
 
 type MetaCampaign = {
@@ -20,6 +22,7 @@ type MetaInsights = {
 };
 
 const META_API_VERSION = process.env.META_MARKETING_API_VERSION ?? "v21.0";
+const META_APP_SECRET = process.env.META_APP_SECRET ?? "";
 
 type MetaGraphErrorBody = {
   error?: { message?: string; error_user_msg?: string; error_user_title?: string; code?: number };
@@ -34,6 +37,30 @@ export async function readMetaGraphFailureMessage(response: Response): Promise<s
     // ignore JSON parse errors
   }
   return `Meta Graph API грешка (HTTP ${response.status}).`;
+}
+
+/** Meta appsecret_proof = HMAC_SHA256(access_token, META_APP_SECRET). */
+export function generateMetaAppSecretProof(accessToken: string): string | null {
+  const token = accessToken.trim();
+  if (!token || !META_APP_SECRET) return null;
+  return createHmac("sha256", META_APP_SECRET).update(token).digest("hex");
+}
+
+/** Добавя `access_token` + `appsecret_proof` като query params към Graph URL. */
+export function attachMetaAuthToUrl(url: URL, accessToken: string) {
+  url.searchParams.set("access_token", accessToken);
+  const proof = generateMetaAppSecretProof(accessToken);
+  if (proof) {
+    url.searchParams.set("appsecret_proof", proof);
+  }
+}
+
+function attachMetaAuthToPayload(payload: URLSearchParams, accessToken: string) {
+  payload.set("access_token", accessToken);
+  const proof = generateMetaAppSecretProof(accessToken);
+  if (proof) {
+    payload.set("appsecret_proof", proof);
+  }
 }
 
 /** Нормализира ad account id към вид act_XXX за сравнение. */
@@ -55,7 +82,7 @@ export async function fetchCampaignAdAccountId(
 ): Promise<{ accountId: string | null; errorMessage?: string }> {
   const url = new URL(`https://graph.facebook.com/${META_API_VERSION}/${campaignId}`);
   url.searchParams.set("fields", "account_id");
-  url.searchParams.set("access_token", accessToken);
+  attachMetaAuthToUrl(url, accessToken);
 
   const res = await fetch(url.toString(), { cache: "no-store" });
   if (res.status === 401) {
@@ -90,7 +117,7 @@ export async function updateCampaignDailyBudget(
   const updateUrl = new URL(`https://graph.facebook.com/${META_API_VERSION}/${campaignId}`);
   const payload = new URLSearchParams();
   payload.set("daily_budget", String(minor));
-  payload.set("access_token", accessToken);
+  attachMetaAuthToPayload(payload, accessToken);
 
   const response = await fetch(updateUrl.toString(), {
     method: "POST",
@@ -121,7 +148,7 @@ export async function updateCampaignNameMeta(
   const updateUrl = new URL(`https://graph.facebook.com/${META_API_VERSION}/${campaignId}`);
   const payload = new URLSearchParams();
   payload.set("name", trimmed);
-  payload.set("access_token", accessToken);
+  attachMetaAuthToPayload(payload, accessToken);
 
   const response = await fetch(updateUrl.toString(), {
     method: "POST",
@@ -144,7 +171,7 @@ async function fetchMetaAccountTotalSpend(normalizedAccount: string, accessToken
   const url = new URL(`https://graph.facebook.com/${META_API_VERSION}/${normalizedAccount}/insights`);
   url.searchParams.set("fields", "spend");
   url.searchParams.set("date_preset", "last_30d");
-  url.searchParams.set("access_token", accessToken);
+  attachMetaAuthToUrl(url, accessToken);
   const res = await fetch(url.toString(), { cache: "no-store" });
   if (res.status === 401) {
     const error = new Error("TOKEN_EXPIRED");
@@ -166,7 +193,7 @@ export async function fetchMetaCampaigns(
 
   const accountUrl = new URL(`https://graph.facebook.com/${META_API_VERSION}/${normalizedAccount}`);
   accountUrl.searchParams.set("fields", "currency");
-  accountUrl.searchParams.set("access_token", accessToken);
+  attachMetaAuthToUrl(accountUrl, accessToken);
 
   const accountResponse = await fetch(accountUrl.toString(), { cache: "no-store" });
   if (accountResponse.status === 401) {
@@ -180,7 +207,7 @@ export async function fetchMetaCampaigns(
   const campaignsUrl = new URL(baseUrl);
   campaignsUrl.searchParams.set("fields", "id,name,status,objective");
   campaignsUrl.searchParams.set("limit", "100");
-  campaignsUrl.searchParams.set("access_token", accessToken);
+  attachMetaAuthToUrl(campaignsUrl, accessToken);
 
   const campaignsResponse = await fetch(campaignsUrl.toString(), { cache: "no-store" });
   if (campaignsResponse.status === 401) {
@@ -269,7 +296,7 @@ export async function updateCampaignStatus(
   const updateUrl = new URL(`https://graph.facebook.com/${META_API_VERSION}/${campaignId}`);
   const payload = new URLSearchParams();
   payload.set("status", status);
-  payload.set("access_token", accessToken);
+  attachMetaAuthToPayload(payload, accessToken);
 
   const response = await fetch(updateUrl.toString(), {
     method: "POST",
@@ -296,7 +323,7 @@ async function fetchCampaignInsights(campaignId: string, accessToken: string): P
     "spend,clicks,impressions,actions,action_values,cpc,ctr,frequency,purchase_roas"
   );
   insightsUrl.searchParams.set("date_preset", "last_30d");
-  insightsUrl.searchParams.set("access_token", accessToken);
+  attachMetaAuthToUrl(insightsUrl, accessToken);
 
   const insightsResponse = await fetch(insightsUrl.toString(), { cache: "no-store" });
   if (!insightsResponse.ok) {
@@ -315,7 +342,7 @@ async function fetchPublisherPlatformBreakdown(
   insightsUrl.searchParams.set("fields", "spend");
   insightsUrl.searchParams.set("breakdowns", "publisher_platform");
   insightsUrl.searchParams.set("date_preset", "last_30d");
-  insightsUrl.searchParams.set("access_token", accessToken);
+  attachMetaAuthToUrl(insightsUrl, accessToken);
 
   const insightsResponse = await fetch(insightsUrl.toString(), { cache: "no-store" });
   if (!insightsResponse.ok) {

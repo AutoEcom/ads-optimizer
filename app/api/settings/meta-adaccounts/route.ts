@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { getAdPlatformTokenRow } from "@/lib/ad-platform-token-server";
-import { readMetaGraphFailureMessage } from "@/lib/meta-api";
+import { attachMetaAuthToUrl, readMetaGraphFailureMessage } from "@/lib/meta-api";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 const META_API_VERSION = process.env.META_MARKETING_API_VERSION ?? "v21.0";
@@ -40,7 +40,7 @@ export async function GET() {
     const url = new URL(`https://graph.facebook.com/${META_API_VERSION}/me/adaccounts`);
     url.searchParams.set("fields", "name,account_id,id");
     url.searchParams.set("limit", "200");
-    url.searchParams.set("access_token", tokenRow.accessToken);
+    attachMetaAuthToUrl(url, tokenRow.accessToken);
 
     const res = await fetch(url.toString(), { cache: "no-store" });
     if (res.status === 401) {
