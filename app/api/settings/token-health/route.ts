@@ -38,7 +38,7 @@ export async function GET(request: Request) {
 
     const { data, error } = await supabase
       .from("ad_platform_tokens")
-      .select("access_token,token_expires_at,is_active")
+      .select("access_token,token_expires_at,updated_at,is_active")
       .eq("user_id", user.id)
       .eq("platform", platform)
       .maybeSingle();
@@ -49,6 +49,15 @@ export async function GET(request: Request) {
       return NextResponse.json({ ok: true, valid: false, expiresSoon: false });
     }
 
+    const nowUtcMs = Date.now();
+    const updatedAtMs = data.updated_at ? Date.parse(data.updated_at) : Number.NaN;
+    const recentlyUpdated = Number.isFinite(updatedAtMs) && nowUtcMs - updatedAtMs < 30_000;
+
+    // Grace window: точно след OAuth sync даваме време на бекенд задачите да се стабилизират.
+    if (recentlyUpdated) {
+      return NextResponse.json({ ok: true, valid: true, expiresSoon: false });
+    }
+
     const valid =
       platform === "Meta"
         ? await validateMetaToken(data.access_token)
@@ -56,9 +65,11 @@ export async function GET(request: Request) {
 
     let expiresSoon = false;
     if (data.token_expires_at) {
-      const expiresAtMs = new Date(data.token_expires_at).getTime();
+      const expiresAtMs = Date.parse(data.token_expires_at);
       if (Number.isFinite(expiresAtMs)) {
-        expiresSoon = expiresAtMs - Date.now() < 10 * 60 * 1000;
+        const remainingMs = expiresAtMs - nowUtcMs;
+        // "Нужна е повторна връзка" само ако е изтекъл или остава под 10 мин.
+        expiresSoon = remainingMs <= 0 || remainingMs <= 10 * 60 * 1000;
       }
     }
 

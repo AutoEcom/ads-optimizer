@@ -518,7 +518,15 @@ export async function syncOAuthTokenFromSession(platform: Platform) {
     throw new Error("OAuth сесията не върна provider token.");
   }
 
-  const tokenExpiresAt = new Date(Date.now() + 55 * 60 * 1000).toISOString();
+  const sessionExpiresAt =
+    typeof session.expires_at === "number" && Number.isFinite(session.expires_at)
+      ? new Date(session.expires_at * 1000).toISOString()
+      : null;
+
+  // Meta access токените често са long-lived; ако OAuth не върне expiry, не маркираме
+  // връзката като "expiring soon" след минути.
+  const fallbackMs = platform === "Meta" ? 60 * 24 * 60 * 60 * 1000 : 55 * 60 * 1000;
+  const tokenExpiresAt = sessionExpiresAt ?? new Date(Date.now() + fallbackMs).toISOString();
   await upsertPlatformToken(
     platform,
     session.provider_token,
