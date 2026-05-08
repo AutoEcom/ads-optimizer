@@ -105,6 +105,14 @@ export async function upsertPlatformToken(
     is_active: true
   };
 
+  const payloadNoOAuthColumns = {
+    user_id: user.id,
+    platform,
+    access_token: sanitizedToken,
+    ad_account_id: sanitizedAccountId,
+    is_active: true
+  };
+
   const { data: updatedRows, error: updateError } = await supabase
     .from("ad_platform_tokens")
     .update({
@@ -119,6 +127,49 @@ export async function upsertPlatformToken(
     .select("id");
 
   if (updateError) {
+    if (isMissingOAuthTokenColumnsError(updateError)) {
+      const { data: updateRowsNoOAuth, error: updateNoOAuthError } = await supabase
+        .from("ad_platform_tokens")
+        .update({
+          access_token: sanitizedToken,
+          ad_account_id: sanitizedAccountId,
+          is_active: true
+        })
+        .eq("user_id", user.id)
+        .eq("platform", platform)
+        .select("id");
+      if (!updateNoOAuthError) {
+        if ((updateRowsNoOAuth ?? []).length > 0) return;
+        const { error: insertNoOAuthError } = await supabase.from("ad_platform_tokens").insert(payloadNoOAuthColumns);
+        if (!insertNoOAuthError) return;
+        if (isMissingAdAccountColumnError(insertNoOAuthError)) {
+          await upsertPlatformTokenLegacyAccountId({
+            supabase,
+            userId: user.id,
+            platform,
+            accessToken: sanitizedToken,
+            refreshToken: refreshToken?.trim() || null,
+            tokenExpiresAt: tokenExpiresAt ?? null,
+            accountId: sanitizedAccountId
+          });
+          return;
+        }
+        throw insertNoOAuthError;
+      }
+      if (isMissingAdAccountColumnError(updateNoOAuthError)) {
+        await upsertPlatformTokenLegacyAccountId({
+          supabase,
+          userId: user.id,
+          platform,
+          accessToken: sanitizedToken,
+          refreshToken: refreshToken?.trim() || null,
+          tokenExpiresAt: tokenExpiresAt ?? null,
+          accountId: sanitizedAccountId
+        });
+        return;
+      }
+      throw updateNoOAuthError;
+    }
     if (isMissingAdAccountColumnError(updateError)) {
       await upsertPlatformTokenLegacyAccountId({
         supabase,
@@ -137,6 +188,23 @@ export async function upsertPlatformToken(
 
   const { error: insertError } = await supabase.from("ad_platform_tokens").insert(payload);
   if (insertError) {
+    if (isMissingOAuthTokenColumnsError(insertError)) {
+      const { error: insertNoOAuthError } = await supabase.from("ad_platform_tokens").insert(payloadNoOAuthColumns);
+      if (!insertNoOAuthError) return;
+      if (isMissingAdAccountColumnError(insertNoOAuthError)) {
+        await upsertPlatformTokenLegacyAccountId({
+          supabase,
+          userId: user.id,
+          platform,
+          accessToken: sanitizedToken,
+          refreshToken: refreshToken?.trim() || null,
+          tokenExpiresAt: tokenExpiresAt ?? null,
+          accountId: sanitizedAccountId
+        });
+        return;
+      }
+      throw insertNoOAuthError;
+    }
     if (isMissingAdAccountColumnError(insertError)) {
       await upsertPlatformTokenLegacyAccountId({
         supabase,
@@ -156,6 +224,12 @@ export async function upsertPlatformToken(
 function isMissingAdAccountColumnError(error: { message?: string } | null) {
   const message = error?.message ?? "";
   return message.includes("ad_account_id") && message.includes("schema cache");
+}
+
+function isMissingOAuthTokenColumnsError(error: { message?: string } | null) {
+  const message = error?.message ?? "";
+  const schemaCache = message.includes("schema cache");
+  return schemaCache && (message.includes("refresh_token") || message.includes("token_expires_at"));
 }
 
 async function upsertPlatformTokenLegacyAccountId(args: {
@@ -182,7 +256,32 @@ async function upsertPlatformTokenLegacyAccountId(args: {
     .eq("platform", platform)
     .select("id");
 
-  if (legacyUpdateError) throw legacyUpdateError;
+  if (legacyUpdateError) {
+    if (isMissingOAuthTokenColumnsError(legacyUpdateError)) {
+      const { data: legacyUpdatedRowsNoOAuth, error: legacyUpdateNoOAuthError } = await supabase
+        .from("ad_platform_tokens")
+        .update({
+          access_token: accessToken,
+          account_id: accountId,
+          is_active: true
+        })
+        .eq("user_id", userId)
+        .eq("platform", platform)
+        .select("id");
+      if (legacyUpdateNoOAuthError) throw legacyUpdateNoOAuthError;
+      if ((legacyUpdatedRowsNoOAuth ?? []).length > 0) return;
+      const { error: legacyInsertNoOAuthError } = await supabase.from("ad_platform_tokens").insert({
+        user_id: userId,
+        platform,
+        access_token: accessToken,
+        account_id: accountId,
+        is_active: true
+      });
+      if (legacyInsertNoOAuthError) throw legacyInsertNoOAuthError;
+      return;
+    }
+    throw legacyUpdateError;
+  }
   if ((legacyUpdatedRows ?? []).length > 0) return;
 
   const { error: legacyInsertError } = await supabase.from("ad_platform_tokens").insert({
@@ -195,7 +294,20 @@ async function upsertPlatformTokenLegacyAccountId(args: {
     is_active: true
   });
 
-  if (legacyInsertError) throw legacyInsertError;
+  if (legacyInsertError) {
+    if (isMissingOAuthTokenColumnsError(legacyInsertError)) {
+      const { error: legacyInsertNoOAuthError } = await supabase.from("ad_platform_tokens").insert({
+        user_id: userId,
+        platform,
+        access_token: accessToken,
+        account_id: accountId,
+        is_active: true
+      });
+      if (legacyInsertNoOAuthError) throw legacyInsertNoOAuthError;
+      return;
+    }
+    throw legacyInsertError;
+  }
 }
 
 export async function getPlatformConnectionStatus(platform: Platform): Promise<PlatformConnectionStatus> {
@@ -217,7 +329,7 @@ export async function getPlatformConnectionStatus(platform: Platform): Promise<P
     .limit(1)
     .maybeSingle();
 
-  if (!isMissingAdAccountColumnError(primary.error)) {
+  if (!primary.error) {
     return {
       platform,
       isConnected: Boolean(primary.data?.access_token && primary.data?.is_active),
@@ -230,6 +342,28 @@ export async function getPlatformConnectionStatus(platform: Platform): Promise<P
     };
   }
 
+  if (isMissingOAuthTokenColumnsError(primary.error) && !isMissingAdAccountColumnError(primary.error)) {
+    const withoutOAuthColumns = await supabase
+      .from("ad_platform_tokens")
+      .select("access_token,ad_account_id,is_active,updated_at")
+      .eq("user_id", user.id)
+      .eq("platform", platform)
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (withoutOAuthColumns.error) throw withoutOAuthColumns.error;
+    return {
+      platform,
+      isConnected: Boolean(withoutOAuthColumns.data?.access_token && withoutOAuthColumns.data?.is_active),
+      isActive: Boolean(withoutOAuthColumns.data?.is_active),
+      accountId: withoutOAuthColumns.data?.ad_account_id ?? null,
+      maskedToken: maskToken(withoutOAuthColumns.data?.access_token),
+      refreshTokenMasked: null,
+      tokenExpiresAt: null,
+      updatedAt: withoutOAuthColumns.data?.updated_at ?? null
+    };
+  }
+
   const legacy = await supabase
     .from("ad_platform_tokens")
     .select("access_token,refresh_token,token_expires_at,account_id,is_active,updated_at")
@@ -239,7 +373,30 @@ export async function getPlatformConnectionStatus(platform: Platform): Promise<P
     .limit(1)
     .maybeSingle();
 
-  if (legacy.error) throw legacy.error;
+  if (legacy.error) {
+    if (isMissingOAuthTokenColumnsError(legacy.error)) {
+      const legacyNoOAuth = await supabase
+        .from("ad_platform_tokens")
+        .select("access_token,account_id,is_active,updated_at")
+        .eq("user_id", user.id)
+        .eq("platform", platform)
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (legacyNoOAuth.error) throw legacyNoOAuth.error;
+      return {
+        platform,
+        isConnected: Boolean(legacyNoOAuth.data?.access_token && legacyNoOAuth.data?.is_active),
+        isActive: Boolean(legacyNoOAuth.data?.is_active),
+        accountId: legacyNoOAuth.data?.account_id ?? null,
+        maskedToken: maskToken(legacyNoOAuth.data?.access_token),
+        refreshTokenMasked: null,
+        tokenExpiresAt: null,
+        updatedAt: legacyNoOAuth.data?.updated_at ?? null
+      };
+    }
+    throw legacy.error;
+  }
 
   return {
     platform,
