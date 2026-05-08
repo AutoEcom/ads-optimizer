@@ -142,7 +142,7 @@ export function SidebarShell({ children }: { children: React.ReactNode }) {
           </div>
         </aside>
 
-        <div className="flex-1">
+        <div className="flex-1 pb-20 md:pb-0">
           <div className="mb-3 flex items-center justify-between md:hidden">
             <Sheet>
               <SheetTrigger asChild>
@@ -210,6 +210,29 @@ export function SidebarShell({ children }: { children: React.ReactNode }) {
               {children}
             </motion.div>
           </AnimatePresence>
+          <nav className="fixed bottom-0 left-0 right-0 z-40 border-t border-border/70 bg-slate-950/95 px-2 py-2 backdrop-blur md:hidden">
+            <div className="mx-auto grid max-w-md grid-cols-3 gap-2">
+              {navItems
+                .filter((item) => item.href === "/dashboard" || item.href === "/audit" || item.href === "/history")
+                .map((item) => {
+                  const Icon = item.icon;
+                  const active = pathname === item.href;
+                  return (
+                    <Link
+                      key={item.href}
+                      href={item.href}
+                      className={cn(
+                        "flex min-h-11 min-w-11 flex-col items-center justify-center rounded-md text-[11px] font-medium",
+                        active ? "bg-teal-500/15 text-teal-200" : "text-muted-foreground"
+                      )}
+                    >
+                      <Icon className="mb-0.5 h-4 w-4" />
+                      {item.label}
+                    </Link>
+                  );
+                })}
+            </div>
+          </nav>
         </div>
       </div>
     </div>

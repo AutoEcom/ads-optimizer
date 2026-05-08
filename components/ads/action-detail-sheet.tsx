@@ -234,6 +234,12 @@ export function ActionDetailSheet(props: ActionDetailSheetProps) {
       });
       const payload = (await res.json()) as { success?: boolean; error?: string; code?: string };
       if (!res.ok || !payload.success) {
+        if (payload.code === "PAYWALL_LOCKED" || res.status === 403) {
+          toast.message("Pro функция", {
+            description: "Advanced MCP действията са за Pro план. Coming Soon / Upgrade."
+          });
+          return;
+        }
         if (res.status === 401 || payload.code === "TOKEN_EXPIRED") {
           toast.error("Връзката с Meta изтече. Моля, свържете се отново.");
           return;
@@ -286,6 +292,12 @@ export function ActionDetailSheet(props: ActionDetailSheetProps) {
         const payload = (await res.json()) as { success?: boolean; error?: string; code?: string };
         if (res.ok && payload.success) ok += 1;
         else lastErr = payload.error ?? `HTTP ${res.status}`;
+        if (payload.code === "PAYWALL_LOCKED" || res.status === 403) {
+          toast.message("Pro функция", {
+            description: "Advanced MCP действията са за Pro план. Coming Soon / Upgrade."
+          });
+          break;
+        }
         if (res.status === 401 || payload.code === "TOKEN_EXPIRED") {
           toast.error("Връзката с Meta изтече. Моля, свържете се отново.");
           break;

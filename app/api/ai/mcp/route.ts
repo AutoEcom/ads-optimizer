@@ -17,15 +17,31 @@ type McpRequestBody = {
   campaign_id?: string;
   new_budget?: number;
   new_name?: string;
+  ad_set_id?: string;
+  advantage_plus_enabled?: boolean;
+  campaign_ids?: string[];
+  prefix?: string;
   log_context?: unknown;
 };
 
-const META_TOOLS = new Set<MetaMcpToolName>(["adjust_budget", "pause_campaign", "rename_campaign"]);
+const META_TOOLS = new Set<MetaMcpToolName>([
+  "adjust_budget",
+  "pause_campaign",
+  "rename_campaign",
+  "duplicate_adset",
+  "toggle_advantage_plus",
+  "bulk_rename_campaigns",
+  "compare_creatives"
+]);
 
 const MCP_ACTION_LOG: Record<MetaMcpToolName, "MCP_ADJUST_BUDGET" | "MCP_PAUSE" | "MCP_RENAME"> = {
   adjust_budget: "MCP_ADJUST_BUDGET",
   pause_campaign: "MCP_PAUSE",
-  rename_campaign: "MCP_RENAME"
+  rename_campaign: "MCP_RENAME",
+  duplicate_adset: "MCP_RENAME",
+  toggle_advantage_plus: "MCP_RENAME",
+  bulk_rename_campaigns: "MCP_RENAME",
+  compare_creatives: "MCP_RENAME"
 };
 
 function sanitizeLogContext(raw: unknown): McpLogContextInput | null {
@@ -63,14 +79,33 @@ export async function POST(request: Request) {
       return NextResponse.json(
         {
           error:
-            "Невалиден инструмент. Позволени са само: adjust_budget (бюджет), pause_campaign (пауза), rename_campaign (име)."
+            "Невалиден инструмент. Позволени: adjust_budget, pause_campaign, rename_campaign, duplicate_adset, toggle_advantage_plus, bulk_rename_campaigns, compare_creatives."
         },
         { status: 400 }
       );
     }
 
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("subscription_tier")
+      .eq("id", user.id)
+      .maybeSingle();
+    const tier = (profile?.subscription_tier ?? "beta") as "free" | "beta" | "pro";
+    const advancedTools = new Set<MetaMcpToolName>([
+      "duplicate_adset",
+      "toggle_advantage_plus",
+      "bulk_rename_campaigns",
+      "compare_creatives"
+    ]);
+    if (tier === "free" && tool && advancedTools.has(tool)) {
+      return NextResponse.json(
+        { error: "Advanced MCP действията са налични за Pro план. Coming Soon / Upgrade.", code: "PAYWALL_LOCKED" },
+        { status: 403 }
+      );
+    }
+
     const campaignId = typeof body.campaign_id === "string" ? body.campaign_id.trim() : "";
-    if (!campaignId) {
+    if (!campaignId && !["bulk_rename_campaigns", "compare_creatives", "duplicate_adset", "toggle_advantage_plus"].includes(tool)) {
       return NextResponse.json({ error: "Липсва идентификатор на кампания (campaign_id)." }, { status: 400 });
     }
 
@@ -93,6 +128,16 @@ export async function POST(request: Request) {
         );
       }
     }
+    if (tool === "bulk_rename_campaigns") {
+      if (!Array.isArray(body.campaign_ids) || body.campaign_ids.length === 0 || typeof body.prefix !== "string") {
+        return NextResponse.json({ error: "За bulk_rename_campaigns са нужни campaign_ids[] и prefix." }, { status: 400 });
+      }
+    }
+    if (tool === "duplicate_adset" || tool === "toggle_advantage_plus") {
+      if (typeof body.ad_set_id !== "string" || !body.ad_set_id.trim()) {
+        return NextResponse.json({ error: `За ${tool} е необходим ad_set_id.` }, { status: 400 });
+      }
+    }
 
     const tokenResult = await getAdPlatformTokenRow(supabase, user.id, "Meta");
     if (tokenResult.error || !tokenResult.accessToken || !tokenResult.accountId) {
@@ -107,6 +152,10 @@ export async function POST(request: Request) {
       campaign_id: campaignId,
       new_budget: body.new_budget,
       new_name: body.new_name,
+      ad_set_id: body.ad_set_id,
+      advantage_plus_enabled: body.advantage_plus_enabled,
+      campaign_ids: body.campaign_ids,
+      prefix: body.prefix,
       accessToken: tokenResult.accessToken,
       userAdAccountId: tokenResult.accountId
     });

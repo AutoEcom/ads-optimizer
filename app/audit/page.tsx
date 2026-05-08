@@ -183,7 +183,15 @@ export default function AuditPage() {
     try {
       const result = await runDeepAudit(campaign, 20, 2.5);
       setAuditByCampaign((prev) => ({ ...prev, [campaign.id]: result }));
-    } catch {
+    } catch (error) {
+      if ((error as Error).message === "PAYWALL_FEATURE_LOCKED") {
+        setIsPaywallOpen(true);
+        toast({
+          title: "Pro функция",
+          description: "Deep Audit е наличен за Pro план. Coming Soon / Upgrade."
+        });
+        return;
+      }
       toast({
         title: "Неуспешен дълбок одит",
         description: "Кампанията не можа да бъде анализирана в момента."
@@ -624,44 +632,63 @@ function CampaignTable({
         <CardTitle>{title}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Кампания</TableHead>
-              <TableHead>Разход</TableHead>
-              <TableHead>Конверсии</TableHead>
-              <TableHead>CPA</TableHead>
-              <TableHead className="text-right">Действие</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {rows.map((campaign) => (
-              <TableRow key={campaign.id}>
-                <TableCell>{campaign.campaignName}</TableCell>
-                <TableCell>{formatCurrency(campaign.spend, campaign.currencyCode)}</TableCell>
-                <TableCell>{campaign.conversions}</TableCell>
-                <TableCell>{formatCurrency(campaign.cpa, campaign.currencyCode)}</TableCell>
-                <TableCell className="text-right">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={loadingCampaignId === campaign.id}
-                    onClick={() => void onDeepAudit(campaign)}
-                  >
-                    {loadingCampaignId === campaign.id ? (
-                      "Одитиране..."
-                    ) : (
-                      <span className="inline-flex items-center gap-1">
-                        <Sparkles className="h-3.5 w-3.5" />
-                        Дълбок одит
-                      </span>
-                    )}
-                  </Button>
-                </TableCell>
+        <div className="hidden md:block">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Кампания</TableHead>
+                <TableHead>Разход</TableHead>
+                <TableHead>Конверсии</TableHead>
+                <TableHead>CPA</TableHead>
+                <TableHead className="text-right">Действие</TableHead>
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+            </TableHeader>
+            <TableBody>
+              {rows.map((campaign) => (
+                <TableRow key={campaign.id}>
+                  <TableCell>{campaign.campaignName}</TableCell>
+                  <TableCell>{formatCurrency(campaign.spend, campaign.currencyCode)}</TableCell>
+                  <TableCell>{campaign.conversions}</TableCell>
+                  <TableCell>{formatCurrency(campaign.cpa, campaign.currencyCode)}</TableCell>
+                  <TableCell className="text-right">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={loadingCampaignId === campaign.id}
+                      onClick={() => void onDeepAudit(campaign)}
+                    >
+                      {loadingCampaignId === campaign.id ? (
+                        "Одитиране..."
+                      ) : (
+                        <span className="inline-flex items-center gap-1">
+                          <Sparkles className="h-3.5 w-3.5" />
+                          Дълбок одит
+                        </span>
+                      )}
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+        <div className="space-y-2 md:hidden">
+          {rows.map((campaign) => (
+            <Card key={campaign.id} className="border-border/60 bg-muted/10">
+              <CardContent className="space-y-2 p-3">
+                <p className="text-sm font-medium">{campaign.campaignName}</p>
+                <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
+                  <p>Разход: {formatCurrency(campaign.spend, campaign.currencyCode)}</p>
+                  <p>Конверсии: {campaign.conversions}</p>
+                  <p>CPA: {formatCurrency(campaign.cpa, campaign.currencyCode)}</p>
+                </div>
+                <Button size="sm" variant="outline" disabled={loadingCampaignId === campaign.id} onClick={() => void onDeepAudit(campaign)}>
+                  {loadingCampaignId === campaign.id ? "Одитиране..." : "Дълбок одит"}
+                </Button>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
         {rows.map((campaign) => {
           const insight = auditByCampaign[campaign.id];
           if (!insight) return null;

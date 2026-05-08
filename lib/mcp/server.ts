@@ -1,12 +1,23 @@
 import {
+  bulkRenameCampaigns,
+  duplicateAdSet,
+  fetchCreativePerformance,
   fetchCampaignAdAccountId,
   metaAdAccountsMatch,
+  toggleAdvantagePlusAudience,
   updateCampaignDailyBudget,
   updateCampaignNameMeta,
   updateCampaignStatus
 } from "@/lib/meta-api";
 
-export type MetaMcpToolName = "adjust_budget" | "pause_campaign" | "rename_campaign";
+export type MetaMcpToolName =
+  | "adjust_budget"
+  | "pause_campaign"
+  | "rename_campaign"
+  | "duplicate_adset"
+  | "toggle_advantage_plus"
+  | "bulk_rename_campaigns"
+  | "compare_creatives";
 
 export type MetaMcpExecuteInput = {
   tool: MetaMcpToolName;
@@ -14,6 +25,10 @@ export type MetaMcpExecuteInput = {
   /** Дневен бюджет в основна валута на ad account (напр. 42.5). */
   new_budget?: number;
   new_name?: string;
+  ad_set_id?: string;
+  advantage_plus_enabled?: boolean;
+  campaign_ids?: string[];
+  prefix?: string;
   accessToken: string;
   /** Ad account id на потребителя (act_... или числов низ). */
   userAdAccountId: string;
@@ -30,21 +45,24 @@ export type MetaMcpExecuteResult =
 export async function executeMetaMcpTool(input: MetaMcpExecuteInput): Promise<MetaMcpExecuteResult> {
   const { tool, campaign_id, accessToken, userAdAccountId } = input;
   const cid = campaign_id.trim();
-  if (!cid) {
+  const campaignScopedTools = new Set<MetaMcpToolName>(["adjust_budget", "pause_campaign", "rename_campaign"]);
+  if (campaignScopedTools.has(tool) && !cid) {
     return { ok: false, tool, error: "Липсва campaign_id." };
   }
 
-  const { accountId, errorMessage } = await fetchCampaignAdAccountId(accessToken, cid);
-  if (errorMessage) {
-    return { ok: false, tool, error: errorMessage };
-  }
-  if (!metaAdAccountsMatch(userAdAccountId, accountId)) {
-    return {
-      ok: false,
-      tool,
-      error:
-        "Кампанията не принадлежи на свързания Meta ad account. Провери account ID в Настройки или избери друга кампания."
-    };
+  if (campaignScopedTools.has(tool)) {
+    const { accountId, errorMessage } = await fetchCampaignAdAccountId(accessToken, cid);
+    if (errorMessage) {
+      return { ok: false, tool, error: errorMessage };
+    }
+    if (!metaAdAccountsMatch(userAdAccountId, accountId)) {
+      return {
+        ok: false,
+        tool,
+        error:
+          "Кампанията не принадлежи на свързания Meta ad account. Провери account ID в Настройки или избери друга кампания."
+      };
+    }
   }
 
   try {
@@ -68,6 +86,31 @@ export async function executeMetaMcpTool(input: MetaMcpExecuteInput): Promise<Me
         }
         await updateCampaignNameMeta(accessToken, cid, name);
         return { ok: true, tool, data: { campaign_id: cid, name } };
+      }
+      case "duplicate_adset": {
+        const adSetId = input.ad_set_id?.trim();
+        if (!adSetId) return { ok: false, tool, error: "За duplicate_adset е нужен ad_set_id." };
+        const out = await duplicateAdSet(accessToken, adSetId);
+        return { ok: true, tool, data: { ad_set_id: adSetId, duplicated_to: out.newAdSetId } };
+      }
+      case "toggle_advantage_plus": {
+        const adSetId = input.ad_set_id?.trim();
+        if (!adSetId) return { ok: false, tool, error: "За toggle_advantage_plus е нужен ad_set_id." };
+        await toggleAdvantagePlusAudience(accessToken, adSetId, Boolean(input.advantage_plus_enabled));
+        return { ok: true, tool, data: { ad_set_id: adSetId, advantage_plus_enabled: Boolean(input.advantage_plus_enabled) } };
+      }
+      case "bulk_rename_campaigns": {
+        const ids = (input.campaign_ids ?? []).map((x) => x.trim()).filter(Boolean);
+        const prefix = input.prefix?.trim();
+        if (!ids.length || !prefix) {
+          return { ok: false, tool, error: "За bulk_rename_campaigns са нужни campaign_ids и prefix." };
+        }
+        const out = await bulkRenameCampaigns(accessToken, ids, prefix);
+        return { ok: true, tool, data: { updated: out.updated } };
+      }
+      case "compare_creatives": {
+        const out = await fetchCreativePerformance(accessToken, userAdAccountId);
+        return { ok: true, tool, data: { rows: out.slice(0, 150) } };
       }
     }
   } catch (e) {

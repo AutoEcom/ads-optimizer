@@ -9,6 +9,24 @@ export async function runDeepAudit(
   targetCpa = 20,
   targetRoas = 2.5
 ): Promise<AuditInsight> {
+  const supabase = createSupabaseBrowserClient();
+  if (supabase) {
+    const {
+      data: { user }
+    } = await supabase.auth.getUser();
+    if (user) {
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("subscription_tier")
+        .eq("id", user.id)
+        .maybeSingle();
+      const tier = (profile?.subscription_tier ?? "beta") as "free" | "beta" | "pro";
+      if (tier === "free") {
+        throw new Error("PAYWALL_FEATURE_LOCKED");
+      }
+    }
+  }
+
   const response = await fetch("/api/ai/audit", {
     method: "POST",
     headers: {

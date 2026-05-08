@@ -272,6 +272,16 @@ export function DashboardPage() {
     void loadDigest();
   }, [hasLinkedAdAccounts]);
 
+  // Lightweight refresh за executive KPI без пълен AI orchestration цикъл.
+  useEffect(() => {
+    if (!hasLinkedAdAccounts) return;
+    const id = window.setInterval(() => {
+      void mutate(META_ADS_SWR_KEY);
+      void mutate(GOOGLE_ADS_SWR_KEY);
+    }, 25_000);
+    return () => window.clearInterval(id);
+  }, [hasLinkedAdAccounts, mutate]);
+
   useEffect(() => {
     if (!hasLinkedAdAccounts) return;
 
@@ -299,6 +309,19 @@ export function DashboardPage() {
     try {
       const result = await runDeepAudit(campaign, savedTargets.targetCpa, savedTargets.targetRoas);
       setAuditByCampaign((prev) => ({ ...prev, [campaign.id]: result }));
+    } catch (error) {
+      if ((error as Error).message === "PAYWALL_FEATURE_LOCKED") {
+        toast({
+          title: "Pro функция",
+          description: "Deep Audit е наличен за Pro план. Coming Soon / Upgrade."
+        });
+        setIsPaywallOpen(true);
+        return;
+      }
+      toast({
+        title: "Неуспешен дълбок одит",
+        description: "Провери токените и опитай отново."
+      });
     } finally {
       setLoadingCampaignId(null);
     }
@@ -980,46 +1003,66 @@ function CampaignTable({
         <CardTitle>{title}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Кампания</TableHead>
-              <TableHead>Разход</TableHead>
-              <TableHead>Конверсии</TableHead>
-              <TableHead>CPA</TableHead>
-              <TableHead>ROAS</TableHead>
-              <TableHead className="text-right">Действие</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {rows.map((campaign) => (
-              <TableRow key={campaign.id}>
-                <TableCell>{campaign.campaignName}</TableCell>
-                <TableCell>{formatCurrency(campaign.spend, campaign.currencyCode)}</TableCell>
-                <TableCell>{campaign.conversions}</TableCell>
-                <TableCell>{campaign.cpa ? formatCurrency(campaign.cpa, campaign.currencyCode) : "-"}</TableCell>
-                <TableCell>{campaign.roas.toFixed(1)}</TableCell>
-                <TableCell className="text-right">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={loadingId === campaign.id}
-                    onClick={() => onAudit(campaign)}
-                  >
-                    {loadingId === campaign.id ? (
-                      "Одитиране..."
-                    ) : (
-                      <span className="inline-flex items-center gap-1">
-                        <Sparkles className="h-3.5 w-3.5" />
-                        Дълбок одит
-                      </span>
-                    )}
-                  </Button>
-                </TableCell>
+        <div className="hidden md:block">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Кампания</TableHead>
+                <TableHead>Разход</TableHead>
+                <TableHead>Конверсии</TableHead>
+                <TableHead>CPA</TableHead>
+                <TableHead>ROAS</TableHead>
+                <TableHead className="text-right">Действие</TableHead>
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+            </TableHeader>
+            <TableBody>
+              {rows.map((campaign) => (
+                <TableRow key={campaign.id}>
+                  <TableCell>{campaign.campaignName}</TableCell>
+                  <TableCell>{formatCurrency(campaign.spend, campaign.currencyCode)}</TableCell>
+                  <TableCell>{campaign.conversions}</TableCell>
+                  <TableCell>{campaign.cpa ? formatCurrency(campaign.cpa, campaign.currencyCode) : "-"}</TableCell>
+                  <TableCell>{campaign.roas.toFixed(1)}</TableCell>
+                  <TableCell className="text-right">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={loadingId === campaign.id}
+                      onClick={() => onAudit(campaign)}
+                    >
+                      {loadingId === campaign.id ? (
+                        "Одитиране..."
+                      ) : (
+                        <span className="inline-flex items-center gap-1">
+                          <Sparkles className="h-3.5 w-3.5" />
+                          Дълбок одит
+                        </span>
+                      )}
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+        <div className="space-y-2 md:hidden">
+          {rows.map((campaign) => (
+            <Card key={campaign.id} className="border-border/60 bg-muted/10">
+              <CardContent className="space-y-2 p-3">
+                <p className="text-sm font-medium">{campaign.campaignName}</p>
+                <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
+                  <p>Разход: {formatCurrency(campaign.spend, campaign.currencyCode)}</p>
+                  <p>Конверсии: {campaign.conversions}</p>
+                  <p>CPA: {campaign.cpa ? formatCurrency(campaign.cpa, campaign.currencyCode) : "-"}</p>
+                  <p>ROAS: {campaign.roas.toFixed(1)}</p>
+                </div>
+                <Button size="sm" variant="outline" disabled={loadingId === campaign.id} onClick={() => onAudit(campaign)}>
+                  {loadingId === campaign.id ? "Одитиране..." : "Дълбок одит"}
+                </Button>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
 
         {rows.map((campaign) => {
           const insight = auditByCampaign[campaign.id];

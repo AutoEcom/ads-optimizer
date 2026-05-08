@@ -21,6 +21,17 @@ type MetaInsights = {
   purchase_roas?: Array<{ value: string }>;
 };
 
+type MetaAdCreativeRow = {
+  ad_id?: string;
+  ad_name?: string;
+  creative_id?: string;
+  image_hash?: string;
+  video_asset?: string;
+  spend?: string;
+  ctr?: string;
+  purchase_roas?: Array<{ value?: string }>;
+};
+
 const META_API_VERSION = process.env.META_MARKETING_API_VERSION ?? "v21.0";
 const META_APP_SECRET = process.env.META_APP_SECRET ?? "";
 
@@ -61,6 +72,15 @@ function attachMetaAuthToPayload(payload: URLSearchParams, accessToken: string) 
   if (proof) {
     payload.set("appsecret_proof", proof);
   }
+}
+
+async function metaPost(url: URL, payload: URLSearchParams) {
+  return fetch(url.toString(), {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: payload.toString(),
+    cache: "no-store"
+  });
 }
 
 /** Нормализира ad account id към вид act_XXX за сравнение. */
@@ -119,12 +139,7 @@ export async function updateCampaignDailyBudget(
   payload.set("daily_budget", String(minor));
   attachMetaAuthToPayload(payload, accessToken);
 
-  const response = await fetch(updateUrl.toString(), {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: payload.toString(),
-    cache: "no-store"
-  });
+  const response = await metaPost(updateUrl, payload);
 
   if (response.status === 401) {
     const error = new Error("TOKEN_EXPIRED");
@@ -150,12 +165,7 @@ export async function updateCampaignNameMeta(
   payload.set("name", trimmed);
   attachMetaAuthToPayload(payload, accessToken);
 
-  const response = await fetch(updateUrl.toString(), {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: payload.toString(),
-    cache: "no-store"
-  });
+  const response = await metaPost(updateUrl, payload);
 
   if (response.status === 401) {
     const error = new Error("TOKEN_EXPIRED");
@@ -298,12 +308,7 @@ export async function updateCampaignStatus(
   payload.set("status", status);
   attachMetaAuthToPayload(payload, accessToken);
 
-  const response = await fetch(updateUrl.toString(), {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: payload.toString(),
-    cache: "no-store"
-  });
+  const response = await metaPost(updateUrl, payload);
 
   if (response.status === 401) {
     const error = new Error("TOKEN_EXPIRED");
@@ -314,6 +319,102 @@ export async function updateCampaignStatus(
   if (!response.ok) {
     throw new Error(await readMetaGraphFailureMessage(response));
   }
+}
+
+/** Дублира ad set в същата кампания. */
+export async function duplicateAdSet(
+  accessToken: string,
+  adSetId: string,
+  renameSuffix = "Copy"
+): Promise<{ newAdSetId: string | null }> {
+  const url = new URL(`https://graph.facebook.com/${META_API_VERSION}/${adSetId}/copies`);
+  const payload = new URLSearchParams();
+  payload.set("rename_options", JSON.stringify({ rename_suffix: ` ${renameSuffix}` }));
+  attachMetaAuthToPayload(payload, accessToken);
+  const res = await metaPost(url, payload);
+  if (res.status === 401) {
+    const error = new Error("TOKEN_EXPIRED");
+    (error as Error & { status?: number }).status = 401;
+    throw error;
+  }
+  if (!res.ok) throw new Error(await readMetaGraphFailureMessage(res));
+  const json = (await res.json()) as { copied_adset_id?: string; id?: string };
+  return { newAdSetId: json.copied_adset_id ?? json.id ?? null };
+}
+
+/** Включва/изключва Advantage+ audience в ad set targeting. */
+export async function toggleAdvantagePlusAudience(
+  accessToken: string,
+  adSetId: string,
+  enabled: boolean
+): Promise<void> {
+  const url = new URL(`https://graph.facebook.com/${META_API_VERSION}/${adSetId}`);
+  const payload = new URLSearchParams();
+  payload.set("targeting_automation", JSON.stringify({ advantage_audience: enabled }));
+  attachMetaAuthToPayload(payload, accessToken);
+  const res = await metaPost(url, payload);
+  if (res.status === 401) {
+    const error = new Error("TOKEN_EXPIRED");
+    (error as Error & { status?: number }).status = 401;
+    throw error;
+  }
+  if (!res.ok) throw new Error(await readMetaGraphFailureMessage(res));
+}
+
+/** Масово rename на кампании по префикс. */
+export async function bulkRenameCampaigns(
+  accessToken: string,
+  campaignIds: string[],
+  prefix: string
+): Promise<{ updated: number }> {
+  let updated = 0;
+  const safePrefix = prefix.trim();
+  for (const cidRaw of campaignIds) {
+    const cid = cidRaw.trim();
+    if (!cid) continue;
+    const getUrl = new URL(`https://graph.facebook.com/${META_API_VERSION}/${cid}`);
+    getUrl.searchParams.set("fields", "name");
+    attachMetaAuthToUrl(getUrl, accessToken);
+    const getRes = await fetch(getUrl.toString(), { cache: "no-store" });
+    if (!getRes.ok) continue;
+    const current = (await getRes.json()) as { name?: string };
+    const nextName = `${safePrefix}${current.name ? ` ${current.name}` : ""}`.trim();
+    if (!nextName) continue;
+    await updateCampaignNameMeta(accessToken, cid, nextName);
+    updated += 1;
+  }
+  return { updated };
+}
+
+/** Creative performance по ad creative (CTR/ROAS/Spend). */
+export async function fetchCreativePerformance(
+  accessToken: string,
+  adAccountId: string
+): Promise<
+  Array<{ adId: string; adName: string; creativeKey: string; ctr: number; roas: number; spend: number }>
+> {
+  const normalizedAccount = adAccountId.startsWith("act_") ? adAccountId : `act_${adAccountId}`;
+  const url = new URL(`https://graph.facebook.com/${META_API_VERSION}/${normalizedAccount}/insights`);
+  url.searchParams.set("level", "ad");
+  url.searchParams.set("fields", "ad_id,ad_name,creative_id,image_hash,video_asset,ctr,spend,purchase_roas");
+  url.searchParams.set("date_preset", "last_30d");
+  attachMetaAuthToUrl(url, accessToken);
+  const res = await fetch(url.toString(), { cache: "no-store" });
+  if (res.status === 401) {
+    const error = new Error("TOKEN_EXPIRED");
+    (error as Error & { status?: number }).status = 401;
+    throw error;
+  }
+  if (!res.ok) throw new Error(await readMetaGraphFailureMessage(res));
+  const payload = (await res.json()) as { data?: MetaAdCreativeRow[] };
+  return (payload.data ?? []).map((row) => ({
+    adId: String(row.ad_id ?? ""),
+    adName: String(row.ad_name ?? "Ad"),
+    creativeKey: String(row.image_hash ?? row.video_asset ?? row.creative_id ?? "unknown"),
+    ctr: Number(row.ctr ?? 0),
+    roas: Number(row.purchase_roas?.[0]?.value ?? 0),
+    spend: Number(row.spend ?? 0)
+  }));
 }
 
 async function fetchCampaignInsights(campaignId: string, accessToken: string): Promise<MetaInsights> {
