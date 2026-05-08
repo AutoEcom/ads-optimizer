@@ -91,9 +91,9 @@ export function SidebarShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-foreground">
-      <div className="mx-auto flex max-w-7xl gap-4 px-3 py-4 md:px-4">
-        <aside className="premium-glow sticky top-4 hidden h-[calc(100vh-2rem)] w-64 rounded-xl p-4 md:block">
+    <div className="min-h-[100dvh] bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-foreground">
+      <div className="mx-auto flex min-h-[100dvh] w-full max-w-7xl gap-4 px-3 py-4 md:px-4">
+        <aside className="premium-glow sticky top-4 hidden h-[calc(100dvh-2rem)] w-64 rounded-xl p-4 md:block">
           <div className="flex h-full flex-col">
             <p className="mb-4 text-sm font-semibold text-teal-300">AdGuard AI</p>
             <nav className="space-y-2">
@@ -142,7 +142,7 @@ export function SidebarShell({ children }: { children: React.ReactNode }) {
           </div>
         </aside>
 
-        <div className="flex-1 pb-20 md:pb-0">
+        <div className="min-w-0 flex-1 overflow-visible pb-24 md:pb-0">
           <div className="mb-3 flex items-center justify-between md:hidden">
             <Sheet>
               <SheetTrigger asChild>
@@ -210,7 +210,7 @@ export function SidebarShell({ children }: { children: React.ReactNode }) {
               {children}
             </motion.div>
           </AnimatePresence>
-          <nav className="fixed bottom-0 left-0 right-0 z-40 border-t border-border/70 bg-slate-950/95 px-2 py-2 backdrop-blur md:hidden">
+          <nav className="fixed bottom-0 left-0 right-0 z-[90] border-t border-border/70 bg-slate-950/95 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 backdrop-blur md:hidden">
             <div className="mx-auto grid max-w-md grid-cols-3 gap-2">
               {navItems
                 .filter((item) => item.href === "/dashboard" || item.href === "/audit" || item.href === "/history")

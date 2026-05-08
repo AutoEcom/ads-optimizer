@@ -250,7 +250,7 @@ export default function AuditPage() {
   const showAuditBusyOverlay = (hasLinkedAdAccounts && fetchingCachedAudit && !healthAudit) || loadingHealth;
 
   return (
-    <main className="space-y-4">
+    <main className="w-full space-y-4 overflow-visible">
       {linkedAccountStatus === "loading" ? (
         <AuditPageConnectionSkeleton />
       ) : linkedAccountStatus === "not-linked" ? (

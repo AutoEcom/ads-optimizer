@@ -454,7 +454,7 @@ export function DashboardPage() {
   const displayCurrency = metaCurrency === googleCurrency ? metaCurrency : "EUR";
 
   return (
-    <main className="mx-auto min-h-screen max-w-7xl space-y-6 px-4 py-8">
+    <main className="mx-auto w-full max-w-7xl space-y-6 overflow-visible px-3 py-5 sm:px-4 sm:py-8">
       {linkedAccountStatus === "loading" ? (
         <DashboardConnectionSkeleton />
       ) : linkedAccountStatus === "not-linked" ? (

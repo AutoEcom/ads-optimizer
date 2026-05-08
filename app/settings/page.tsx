@@ -235,20 +235,20 @@ export default function SettingsPage() {
   }, [googleStatus?.accountId]);
 
   return (
-    <main className="space-y-4">
-      <Card>
+    <main className="w-full space-y-3">
+      <Card className="w-full">
         <CardHeader>
           <CardTitle>Настройки</CardTitle>
           <CardDescription>Интелигентен onboarding за цели и рекламни интеграции.</CardDescription>
         </CardHeader>
-        <CardContent className="space-y-5">
-          <Card className="border-border/60 bg-slate-950/30">
+        <CardContent className="space-y-4 p-4 sm:p-6">
+          <Card className="w-full border-border/60 bg-slate-950/30">
             <CardHeader>
               <CardTitle className="text-base">Бизнес цели</CardTitle>
               <CardDescription>Настрой KPI таргетите, които AI ще използва за оптимизация.</CardDescription>
             </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid gap-4 md:grid-cols-2">
+            <CardContent className="space-y-3 p-4 sm:p-5">
+              <div className="grid gap-3 md:grid-cols-2">
                 <div className="space-y-2">
                   <p className="text-sm font-medium">Target CPA (EUR)</p>
                   <Input
@@ -293,12 +293,12 @@ export default function SettingsPage() {
             </CardContent>
           </Card>
 
-          <Card className="border-border/60 bg-slate-950/30">
+          <Card className="w-full border-border/60 bg-slate-950/30">
             <CardHeader>
               <CardTitle className="text-base">Интеграции</CardTitle>
               <CardDescription>Свържи рекламните платформи и избери правилните акаунти.</CardDescription>
             </CardHeader>
-            <CardContent className="space-y-5">
+            <CardContent className="space-y-4 p-4 sm:p-5">
               <div className="space-y-3 rounded-lg border border-border/60 p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <p className="text-sm font-medium">Meta (Facebook Ads)</p>
@@ -332,7 +332,7 @@ export default function SettingsPage() {
                     <select
                       value={metaAccountId}
                       onChange={(event) => void saveMetaAccountSelection(event.target.value)}
-                      className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                      className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm"
                       disabled={accountsLoading || metaAccounts.length === 0}
                     >
                       <option value="">Избери акаунт...</option>
@@ -379,6 +379,7 @@ export default function SettingsPage() {
                   value={googleAccountId}
                   onChange={(event) => setGoogleAccountId(event.target.value)}
                   placeholder="Google Customer ID (напр. 123-456-7890)"
+                  className="w-full"
                 />
               </div>
             </CardContent>
