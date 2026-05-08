@@ -162,6 +162,28 @@ export default function SettingsPage() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
+    const oauthError = params.get("error");
+    const oauthErrorDescription = params.get("error_description");
+    if (oauthError || oauthErrorDescription) {
+      const raw = oauthErrorDescription ?? oauthError ?? "OAuth грешка";
+      let safeMessage = raw;
+      try {
+        safeMessage = decodeURIComponent(raw).replace(/\+/g, " ");
+      } catch {
+        safeMessage = raw;
+      }
+      toast({
+        title: "Неуспешно свързване с Meta",
+        description:
+          "Meta конфигурацията вероятно е непълна или URL адресът не е whitelist-нат. Детайли: " + safeMessage
+      });
+      const nextUrl = new URL(window.location.href);
+      nextUrl.searchParams.delete("error");
+      nextUrl.searchParams.delete("error_description");
+      window.history.replaceState({}, "", `${nextUrl.pathname}${nextUrl.search}`);
+      return;
+    }
+
     const oauth = params.get("oauth");
     if (oauth !== "meta" && oauth !== "google") return;
 

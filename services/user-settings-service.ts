@@ -319,12 +319,18 @@ export async function startPlatformOAuth(platform: Platform) {
 
   const isMeta = platform === "Meta";
   const provider = isMeta ? "facebook" : "google";
-  const redirectTo = `${window.location.origin}/settings?oauth=${isMeta ? "meta" : "google"}`;
+  const redirectBase = process.env.NEXT_PUBLIC_APP_URL?.trim() || "https://guard.ad";
+  const redirectTo = `${redirectBase}/settings?oauth=${isMeta ? "meta" : "google"}`;
   const scopes = isMeta
     ? "ads_management ads_read business_management pages_read_engagement"
     : "https://www.googleapis.com/auth/adwords";
-  const queryParams = isMeta
-    ? undefined
+  const configId = process.env.NEXT_PUBLIC_META_CONFIG_ID?.trim();
+  const queryParams: Record<string, string> = isMeta
+    ? {
+        response_type: "code",
+        display: "popup",
+        ...(configId ? { config_id: configId } : {})
+      }
     : {
         access_type: "offline",
         prompt: "consent",
