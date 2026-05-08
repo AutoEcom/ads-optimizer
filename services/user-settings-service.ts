@@ -7,7 +7,14 @@ export type PlatformConnectionStatus = {
   isActive: boolean;
   accountId: string | null;
   maskedToken: string | null;
+  refreshTokenMasked: string | null;
+  tokenExpiresAt: string | null;
   updatedAt: string | null;
+};
+
+export type MetaAdAccountOption = {
+  id: string;
+  name: string;
 };
 
 export async function upsertUserTargets(targetCpa: number, targetRoas: number) {
@@ -69,7 +76,9 @@ export async function getUserTargets() {
 export async function upsertPlatformToken(
   platform: Platform,
   accessToken: string,
-  adAccountId?: string
+  adAccountId?: string,
+  refreshToken?: string | null,
+  tokenExpiresAt?: string | null
 ) {
   const supabase = createSupabaseBrowserClient();
   if (!supabase) throw new Error("Липсва Supabase конфигурация.");
@@ -90,6 +99,8 @@ export async function upsertPlatformToken(
     user_id: user.id,
     platform,
     access_token: sanitizedToken,
+    refresh_token: refreshToken?.trim() || null,
+    token_expires_at: tokenExpiresAt ?? null,
     ad_account_id: sanitizedAccountId,
     is_active: true
   };
@@ -98,6 +109,8 @@ export async function upsertPlatformToken(
     .from("ad_platform_tokens")
     .update({
       access_token: sanitizedToken,
+      refresh_token: refreshToken?.trim() || null,
+      token_expires_at: tokenExpiresAt ?? null,
       ad_account_id: sanitizedAccountId,
       is_active: true
     })
@@ -112,6 +125,8 @@ export async function upsertPlatformToken(
         userId: user.id,
         platform,
         accessToken: sanitizedToken,
+        refreshToken: refreshToken?.trim() || null,
+        tokenExpiresAt: tokenExpiresAt ?? null,
         accountId: sanitizedAccountId
       });
       return;
@@ -128,6 +143,8 @@ export async function upsertPlatformToken(
         userId: user.id,
         platform,
         accessToken: sanitizedToken,
+        refreshToken: refreshToken?.trim() || null,
+        tokenExpiresAt: tokenExpiresAt ?? null,
         accountId: sanitizedAccountId
       });
       return;
@@ -146,14 +163,18 @@ async function upsertPlatformTokenLegacyAccountId(args: {
   userId: string;
   platform: Platform;
   accessToken: string;
+  refreshToken: string | null;
+  tokenExpiresAt: string | null;
   accountId: string | null;
 }) {
-  const { supabase, userId, platform, accessToken, accountId } = args;
+  const { supabase, userId, platform, accessToken, refreshToken, tokenExpiresAt, accountId } = args;
 
   const { data: legacyUpdatedRows, error: legacyUpdateError } = await supabase
     .from("ad_platform_tokens")
     .update({
       access_token: accessToken,
+      refresh_token: refreshToken,
+      token_expires_at: tokenExpiresAt,
       account_id: accountId,
       is_active: true
     })
@@ -168,6 +189,8 @@ async function upsertPlatformTokenLegacyAccountId(args: {
     user_id: userId,
     platform,
     access_token: accessToken,
+    refresh_token: refreshToken,
+    token_expires_at: tokenExpiresAt,
     account_id: accountId,
     is_active: true
   });
@@ -187,7 +210,7 @@ export async function getPlatformConnectionStatus(platform: Platform): Promise<P
 
   const primary = await supabase
     .from("ad_platform_tokens")
-    .select("access_token,ad_account_id,is_active,updated_at")
+    .select("access_token,refresh_token,token_expires_at,ad_account_id,is_active,updated_at")
     .eq("user_id", user.id)
     .eq("platform", platform)
     .order("updated_at", { ascending: false })
@@ -201,13 +224,15 @@ export async function getPlatformConnectionStatus(platform: Platform): Promise<P
       isActive: Boolean(primary.data?.is_active),
       accountId: primary.data?.ad_account_id ?? null,
       maskedToken: maskToken(primary.data?.access_token),
+      refreshTokenMasked: maskToken(primary.data?.refresh_token),
+      tokenExpiresAt: primary.data?.token_expires_at ?? null,
       updatedAt: primary.data?.updated_at ?? null
     };
   }
 
   const legacy = await supabase
     .from("ad_platform_tokens")
-    .select("access_token,account_id,is_active,updated_at")
+    .select("access_token,refresh_token,token_expires_at,account_id,is_active,updated_at")
     .eq("user_id", user.id)
     .eq("platform", platform)
     .order("updated_at", { ascending: false })
@@ -222,6 +247,8 @@ export async function getPlatformConnectionStatus(platform: Platform): Promise<P
     isActive: Boolean(legacy.data?.is_active),
     accountId: legacy.data?.account_id ?? null,
     maskedToken: maskToken(legacy.data?.access_token),
+    refreshTokenMasked: maskToken(legacy.data?.refresh_token),
+    tokenExpiresAt: legacy.data?.token_expires_at ?? null,
     updatedAt: legacy.data?.updated_at ?? null
   };
 }
@@ -236,13 +263,118 @@ export async function disconnectPlatformToken(platform: Platform) {
 
   if (!user) throw new Error("Няма активна сесия.");
 
-  const { error } = await supabase
-    .from("ad_platform_tokens")
-    .update({ is_active: false })
-    .eq("user_id", user.id)
-    .eq("platform", platform);
+  const { error } = await supabase.from("ad_platform_tokens").delete().eq("user_id", user.id).eq("platform", platform);
 
   if (error) throw error;
+}
+
+export async function updatePlatformAccountId(platform: Platform, accountId: string) {
+  const supabase = createSupabaseBrowserClient();
+  if (!supabase) throw new Error("Липсва Supabase конфигурация.");
+  const {
+    data: { user }
+  } = await supabase.auth.getUser();
+  if (!user) throw new Error("Няма активна сесия.");
+
+  const sanitizedAccountId = accountId.trim();
+  if (!sanitizedAccountId) throw new Error("Избери рекламен акаунт.");
+
+  const { error: primaryError } = await supabase
+    .from("ad_platform_tokens")
+    .update({ ad_account_id: sanitizedAccountId, is_active: true })
+    .eq("user_id", user.id)
+    .eq("platform", platform);
+  if (!isMissingAdAccountColumnError(primaryError)) {
+    if (primaryError) throw primaryError;
+    return;
+  }
+
+  const { error: legacyError } = await supabase
+    .from("ad_platform_tokens")
+    .update({ account_id: sanitizedAccountId, is_active: true })
+    .eq("user_id", user.id)
+    .eq("platform", platform);
+  if (legacyError) throw legacyError;
+}
+
+export async function fetchMetaAdAccounts(): Promise<MetaAdAccountOption[]> {
+  const response = await fetch("/api/settings/meta-adaccounts", { cache: "no-store" });
+  const payload = (await response.json()) as {
+    accounts?: MetaAdAccountOption[];
+    error?: string;
+    warning?: string;
+  };
+  if (!response.ok) {
+    throw new Error(payload.error ?? "Неуспешно зареждане на Meta акаунтите.");
+  }
+  if (payload.warning) {
+    return [];
+  }
+  return payload.accounts ?? [];
+}
+
+export async function startPlatformOAuth(platform: Platform) {
+  const supabase = createSupabaseBrowserClient();
+  if (!supabase) throw new Error("Липсва Supabase конфигурация.");
+
+  const isMeta = platform === "Meta";
+  const provider = isMeta ? "facebook" : "google";
+  const redirectTo = `${window.location.origin}/settings?oauth=${isMeta ? "meta" : "google"}`;
+  const scopes = isMeta
+    ? "ads_management ads_read business_management pages_read_engagement"
+    : "https://www.googleapis.com/auth/adwords";
+  const queryParams = isMeta
+    ? undefined
+    : {
+        access_type: "offline",
+        prompt: "consent",
+        include_granted_scopes: "true"
+      };
+
+  const { data, error } = await supabase.auth.signInWithOAuth({
+    provider,
+    options: {
+      redirectTo,
+      scopes,
+      queryParams
+    }
+  });
+  if (error) throw error;
+  if (data.url) {
+    window.location.assign(data.url);
+  }
+}
+
+export async function syncOAuthTokenFromSession(platform: Platform) {
+  const supabase = createSupabaseBrowserClient();
+  if (!supabase) throw new Error("Липсва Supabase конфигурация.");
+  const {
+    data: { session }
+  } = await supabase.auth.getSession();
+  if (!session?.provider_token) {
+    throw new Error("OAuth сесията не върна provider token.");
+  }
+
+  const tokenExpiresAt = new Date(Date.now() + 55 * 60 * 1000).toISOString();
+  await upsertPlatformToken(
+    platform,
+    session.provider_token,
+    undefined,
+    session.provider_refresh_token ?? null,
+    tokenExpiresAt
+  );
+}
+
+export async function checkPlatformTokenHealth(platform: Platform): Promise<{ valid: boolean; expiresSoon: boolean }> {
+  const response = await fetch(`/api/settings/token-health?platform=${platform}`, { cache: "no-store" });
+  const payload = (await response.json()) as { valid?: boolean; expiresSoon?: boolean; error?: string };
+  if (!response.ok) {
+    throw new Error(payload.error ?? "Неуспешна проверка на токена.");
+  }
+  return {
+    valid: Boolean(payload.valid),
+    expiresSoon: Boolean(payload.expiresSoon)
+  };
 }
 
 function maskToken(token?: string | null) {

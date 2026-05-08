@@ -13,6 +13,8 @@ create table if not exists public.ad_platform_tokens (
   user_id uuid not null references auth.users(id) on delete cascade,
   platform text not null check (platform in ('Meta', 'Google')),
   access_token text not null,
+  refresh_token text,
+  token_expires_at timestamptz,
   ad_account_id text,
   is_active boolean not null default true,
   created_at timestamptz not null default now(),
