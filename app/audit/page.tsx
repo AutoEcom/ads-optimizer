@@ -632,8 +632,8 @@ function CampaignTable({
         <CardTitle>{title}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="hidden md:block">
-          <Table>
+        <div className="hidden overflow-x-auto md:block">
+          <Table className="min-w-[700px]">
             <TableHeader>
               <TableRow>
                 <TableHead>Кампания</TableHead>

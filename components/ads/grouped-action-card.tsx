@@ -39,7 +39,7 @@ export function GroupedActionCard({
   const rep = group.children[0];
 
   return (
-    <div className="relative pt-2">
+    <div className="relative min-w-0 pt-2">
       <div
         className="pointer-events-none absolute left-2 right-2 top-0 z-0 h-full rounded-lg border border-primary/25 bg-card/40 shadow-sm"
         aria-hidden
@@ -49,7 +49,7 @@ export function GroupedActionCard({
         aria-hidden
       />
 
-      <div className="relative z-[2] rounded-lg border border-primary/45 bg-card pt-2 shadow-md">
+      <div className="relative z-[2] min-w-0 overflow-hidden rounded-lg border border-primary/45 bg-card pt-2 shadow-md">
         <div className="absolute right-3 top-3 z-[3]">
           <PlatformCornerBadge platform={rep.platform} metaPlacement={rep.metaPlacement} />
         </div>
@@ -65,7 +65,7 @@ export function GroupedActionCard({
           <p className={cn("pr-16 text-left text-sm font-medium leading-snug", theme.agentLineClass)}>
             {agentLabel} откри <span className="font-semibold text-foreground/95">{n}</span> подобни оптимизации
           </p>
-          <p className="line-clamp-2 text-xs text-muted-foreground">
+          <p className="line-clamp-2 break-words text-xs text-muted-foreground">
             {formatSlashDatesToBulgarian(rep.task)} и още {n - 1} кампании със същия тип препоръка.
           </p>
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import { useRouter } from "next/navigation";
 import type { Route } from "next";
@@ -143,6 +143,28 @@ export function DashboardPage() {
   const googleCurrency = googleAdsData?.currencyCode ?? "EUR";
   const metaTokenExpired = isTokenExpired(metaAdsError);
   const googleTokenExpired = isTokenExpired(googleAdsError);
+  const rateLimitToastShownRef = useRef(false);
+
+  useEffect(() => {
+    const combinedMessage = `${metaAdsError?.message ?? ""} ${googleAdsError?.message ?? ""}`.toLowerCase();
+    const isRateLimited =
+      combinedMessage.includes("too many calls") ||
+      combinedMessage.includes("rate limit") ||
+      combinedMessage.includes("rate-limiting");
+
+    if (!isRateLimited) {
+      rateLimitToastShownRef.current = false;
+      return;
+    }
+    if (rateLimitToastShownRef.current) return;
+
+    toast({
+      title: "Временно ограничение от Meta API",
+      description:
+        "Има твърде много заявки към рекламния акаунт. Изчакай малко и опитай отново - live данните ще се върнат автоматично."
+    });
+    rateLimitToastShownRef.current = true;
+  }, [metaAdsError?.message, googleAdsError?.message, toast]);
 
   const allCampaigns = useMemo(() => {
     return [...metaCampaignsLive, ...googleCampaignsLive];
@@ -454,7 +476,7 @@ export function DashboardPage() {
   const displayCurrency = metaCurrency === googleCurrency ? metaCurrency : "EUR";
 
   return (
-    <main className="mx-auto w-full max-w-7xl space-y-6 overflow-visible px-3 py-5 sm:px-4 sm:py-8">
+    <main className="mx-auto w-full max-w-7xl space-y-6 overflow-x-hidden overflow-y-visible px-3 py-5 sm:px-4 sm:py-8">
       {linkedAccountStatus === "loading" ? (
         <DashboardConnectionSkeleton />
       ) : linkedAccountStatus === "not-linked" ? (
@@ -521,7 +543,7 @@ export function DashboardPage() {
             </Card>
           </section>
 
-          <Card>
+          <Card className="overflow-hidden">
         <CardHeader>
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
@@ -533,21 +555,25 @@ export function DashboardPage() {
             </span>
           </div>
         </CardHeader>
-        <CardContent className="grid gap-6 lg:grid-cols-[220px_1fr]">
-          <div className="flex flex-col items-center justify-center gap-2">
-            <p className="text-center text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-              Общ здравен статус
-            </p>
-            <RadialScore score={healthAudit?.healthScore ?? 0} />
-          </div>
-          <div className="space-y-4">
-            <div className="grid gap-3 sm:grid-cols-3">
+        <CardContent className="space-y-4">
+            <div className="grid grid-cols-1 items-stretch gap-3 md:grid-cols-3">
+              <Card className="h-full">
+                <CardContent className="flex h-full flex-col items-center justify-center gap-2 p-4">
+                  <p className="text-center text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    Общ здравен статус
+                  </p>
+                  <RadialScore score={healthAudit?.healthScore ?? 0} />
+                </CardContent>
+              </Card>
               <MetricCard
                 label={<span>Потенциално спасени EUR</span>}
                 value={formatCurrencyLatin(potentialSavedEur, displayCurrency)}
                 progress={potentialSavedEur > 0 ? 48 : 0}
               />
               <MetricCard label="Активни аларми" value={activeAlarmsDisplay} progress={40} />
+            </div>
+
+            <div className="grid grid-cols-1 items-stretch gap-3 md:grid-cols-3">
               <MetricCard
                 label={
                   <span className="inline-flex items-center gap-1">
@@ -720,7 +746,6 @@ export function DashboardPage() {
                 ) : null}
               </div>
             </div>
-          </div>
         </CardContent>
       </Card>
 
@@ -939,19 +964,21 @@ function DashboardConnectionSkeleton() {
           <Skeleton className="h-7 w-48" />
           <Skeleton className="h-4 w-72" />
         </CardHeader>
-        <CardContent className="grid gap-6 lg:grid-cols-[220px_1fr]">
-          <div className="flex justify-center">
-            <Skeleton className="h-36 w-36 rounded-full" />
+        <CardContent className="space-y-3">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+            <Card>
+              <CardContent className="flex h-full items-center justify-center p-4">
+                <Skeleton className="h-36 w-36 rounded-full" />
+              </CardContent>
+            </Card>
+            <Skeleton className="h-24 w-full" />
+            <Skeleton className="h-24 w-full" />
           </div>
-          <div className="space-y-3">
-            <div className="grid gap-3 sm:grid-cols-3">
-              <Skeleton className="h-24 w-full" />
-              <Skeleton className="h-24 w-full" />
-              <Skeleton className="h-24 w-full" />
-            </div>
-            <Skeleton className="h-16 w-full" />
-            <Skeleton className="h-20 w-full" />
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+            <Skeleton className="h-24 w-full" />
           </div>
+          <Skeleton className="h-16 w-full" />
+          <Skeleton className="h-20 w-full" />
         </CardContent>
       </Card>
       <div className="grid gap-4 lg:grid-cols-2">
@@ -972,10 +999,10 @@ function MetricCard({
   progress: number;
 }) {
   return (
-    <Card>
+    <Card className="min-w-0 overflow-hidden">
       <CardHeader className="pb-2">
         <CardDescription>{label}</CardDescription>
-        <CardTitle className="text-2xl">{value}</CardTitle>
+        <CardTitle className="break-words text-2xl">{value}</CardTitle>
       </CardHeader>
       <CardContent>
         <Progress value={progress} />
@@ -1003,8 +1030,8 @@ function CampaignTable({
         <CardTitle>{title}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="hidden md:block">
-          <Table>
+        <div className="hidden overflow-x-auto md:block">
+          <Table className="min-w-[760px]">
             <TableHeader>
               <TableRow>
                 <TableHead>Кампания</TableHead>

@@ -29,7 +29,7 @@ export function PrioritizedActionAlert({
   const sheetPending = !auditSnapshotReady || !reasonPreview.trim();
 
   return (
-    <Alert className="relative border-primary/40 pt-2">
+    <Alert className="relative min-w-0 overflow-hidden border-primary/40 pt-2">
       <div className="absolute right-3 top-3 z-[1]">
         <PlatformCornerBadge platform={action.platform} metaPlacement={action.metaPlacement} />
       </div>
@@ -46,7 +46,7 @@ export function PrioritizedActionAlert({
       </AlertTitle>
 
       <AlertDescription className="mt-2 space-y-2">
-        <p className="line-clamp-2 text-sm text-muted-foreground">{reasonPreview}</p>
+        <p className="line-clamp-2 break-words text-sm text-muted-foreground">{reasonPreview}</p>
         <div className="flex flex-wrap items-center gap-2">
           <ActionDetailSheet
             action={action}

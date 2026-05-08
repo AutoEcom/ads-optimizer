@@ -107,23 +107,56 @@ function buildMcpRequestWithLog(
   };
 }
 
+function asFiniteNumber(value: number | null | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
 function projectedFromCampaign(
   campaign: CampaignMetrics | null,
   action: PrioritizedAction,
-  targetCpa?: number
-): { spend: number; cpa: number | null } | null {
+  currentCpa: number,
+  targetCpa: number,
+  currentSpend: number
+): { spend: number; cpa: number; savings: number; cpaLiftPercent: number } | null {
   if (!campaign) return null;
-  const spend = campaign.spend;
-  const cpa = campaign.cpa;
-  const factor = Math.min(0.92, 0.75 + action.impactScore / 400);
-  const optSpend = spend * factor;
-  let optCpa = cpa > 0 ? cpa * (0.88 + (100 - action.impactScore) / 500) : 0;
-  if (targetCpa && targetCpa > 0 && cpa > 0 && cpa > targetCpa) {
-    optCpa = Math.min(optCpa, (cpa + targetCpa) / 2);
+  const impact = Math.max(0, Math.min(100, action.impactScore));
+  const actionKey = action.actionType ?? "";
+
+  let spendFactor = 1;
+  let cpaFactor = 1;
+
+  if (actionKey === "PAUSE") {
+    spendFactor = 0.65;
+    cpaFactor = 0.9;
+  } else if (action.type === "BUDGET_SUFFICIENCY") {
+    spendFactor = 1.08;
+    cpaFactor = 0.9;
+  } else if (action.type === "BID_STRATEGY_AUDITOR") {
+    spendFactor = 0.96;
+    cpaFactor = 0.86;
+  } else if (action.type === "SCALING_STRATEGY") {
+    spendFactor = 1.1;
+    cpaFactor = 0.92;
+  } else {
+    spendFactor = 0.94;
+    cpaFactor = 0.9;
   }
+
+  const confidenceBoost = impact / 1000;
+  const optimizedSpend = Math.max(0, currentSpend * (spendFactor - confidenceBoost / 2));
+  let optimizedCpa = Math.max(0, currentCpa * (cpaFactor - confidenceBoost));
+  if (targetCpa > 0) {
+    optimizedCpa = Math.max(targetCpa * 0.92, Math.min(optimizedCpa, (currentCpa + targetCpa) / 2));
+  }
+
+  const savings = Math.max(0, currentSpend - optimizedSpend);
+  const cpaLiftPercent = currentCpa > 0 ? ((currentCpa - optimizedCpa) / currentCpa) * 100 : 0;
+
   return {
-    spend: Number(optSpend.toFixed(2)),
-    cpa: cpa > 0 && Number.isFinite(optCpa) && optCpa > 0 ? Number(Math.max(0, optCpa).toFixed(2)) : null
+    spend: Number(optimizedSpend.toFixed(2)),
+    cpa: Number(optimizedCpa.toFixed(2)),
+    savings: Number(savings.toFixed(2)),
+    cpaLiftPercent: Number(Math.max(0, cpaLiftPercent).toFixed(1))
   };
 }
 
@@ -155,7 +188,7 @@ export function ActionDetailSheet(props: ActionDetailSheetProps) {
   const agentLabel = skillTypeToAgentLabel(action.type);
   const agentTheme = getSkillAgentVisualTheme(action.type);
   const currency = campaign?.currencyCode ?? "EUR";
-  const projected = projectedFromCampaign(campaign, action, targetCpa);
+  const currentSpend = asFiniteNumber(campaign?.spend);
   const showSkeleton = Boolean(isDataPending) || !reasonFormatted.trim();
 
   const campaignTitle = campaign?.campaignName ?? (action.campaignId ? "Кампания" : "Общ преглед");
@@ -325,23 +358,29 @@ export function ActionDetailSheet(props: ActionDetailSheetProps) {
     }
   }
 
-  const effectiveCpa =
-    typeof action.currentCpa === "number" && Number.isFinite(action.currentCpa)
-      ? action.currentCpa
-      : campaign?.cpa;
-  const hasMeaningfulCpa =
-    campaign &&
-    campaign.conversions > 0 &&
-    typeof effectiveCpa === "number" &&
-    Number.isFinite(effectiveCpa) &&
-    effectiveCpa > 0;
+  const effectiveCpa = asFiniteNumber(
+    typeof action.currentCpa === "number" && Number.isFinite(action.currentCpa) ? action.currentCpa : campaign?.cpa
+  );
 
   const effectiveTargetCpa =
     typeof action.targetCpa === "number" && Number.isFinite(action.targetCpa) && action.targetCpa > 0
       ? action.targetCpa
       : typeof targetCpa === "number" && targetCpa > 0
         ? targetCpa
-        : campaign?.targetCpa;
+        : asFiniteNumber(campaign?.targetCpa);
+
+  const hasImpactInputs = Boolean(
+    campaign && effectiveCpa !== null && effectiveTargetCpa !== null && currentSpend !== null
+  );
+  const projected =
+    campaign &&
+    effectiveCpa !== null &&
+    effectiveTargetCpa !== null &&
+    currentSpend !== null &&
+    effectiveCpa > 0 &&
+    effectiveTargetCpa > 0
+      ? projectedFromCampaign(campaign, action, effectiveCpa, effectiveTargetCpa, currentSpend)
+      : null;
 
   const groupAgentTheme = isGroup && group ? getSkillAgentVisualTheme(group.type) : agentTheme;
   const groupAgentLabel = isGroup && group ? skillTypeToAgentLabel(group.type) : agentLabel;
@@ -356,7 +395,7 @@ export function ActionDetailSheet(props: ActionDetailSheetProps) {
     <>
       <Sheet>
         <SheetTrigger asChild>{trigger}</SheetTrigger>
-        <SheetContent className="flex w-full flex-col gap-0 overflow-y-auto sm:max-w-lg">
+        <SheetContent className="flex w-full flex-col gap-0 overflow-y-auto sm:max-w-xl lg:max-w-2xl">
           <SheetHeader className="space-y-3 border-b border-border/60 pb-4 text-left">
             {isGroup && group ? (
               <>
@@ -466,47 +505,48 @@ export function ActionDetailSheet(props: ActionDetailSheetProps) {
                   </div>
                 </section>
 
-                {campaign ? (
-                  <section className="space-y-3 rounded-lg border border-border/50 bg-muted/20 p-4">
-                    <h3 className="text-sm font-semibold text-foreground">Прогнозно въздействие</h3>
-                    <div className="grid gap-3 sm:grid-cols-2">
+                <section className="space-y-3 rounded-lg border border-border/50 bg-muted/20 p-4">
+                  <h3 className="text-sm font-semibold text-foreground">Прогнозно въздействие</h3>
+                  {hasImpactInputs ? (
+                    <div className="grid gap-3 md:grid-cols-2">
                       <div className="space-y-1">
                         <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Текущо състояние</p>
+                        <p className="text-sm text-foreground">CPA: {formatCurrencyLatin(effectiveCpa as number, currency)}</p>
                         <p className="text-sm text-foreground">
-                          CPA:{" "}
-                          {hasMeaningfulCpa ? formatCurrencyLatin(effectiveCpa!, currency) : "— (няма конверсии)"}
+                          Целев CPA: {formatCurrencyLatin(effectiveTargetCpa as number, currency)}
                         </p>
-                        {typeof effectiveTargetCpa === "number" &&
-                        Number.isFinite(effectiveTargetCpa) &&
-                        effectiveTargetCpa > 0 ? (
-                          <p className="text-sm text-foreground">
-                            Целев CPA: {formatCurrencyLatin(effectiveTargetCpa, currency)}
-                          </p>
-                        ) : null}
-                        <p className="text-sm text-foreground">Разход: {formatCurrencyLatin(campaign.spend, currency)}</p>
-                        <p className="text-sm text-foreground">Конверсии: {campaign.conversions}</p>
+                        <p className="text-sm text-foreground">Разход: {formatCurrencyLatin(currentSpend as number, currency)}</p>
+                        <p className="text-sm text-foreground">Конверсии: {campaign?.conversions ?? 0}</p>
                       </div>
                       <div className="space-y-1">
                         <p className="text-xs font-medium uppercase tracking-wide text-teal-200/90">Оптимизирано състояние</p>
                         {projected ? (
                           <>
-                            {projected.cpa != null ? (
-                              <p className="text-sm text-teal-100">
-                                CPA: ~{formatCurrencyLatin(projected.cpa, currency)}
-                              </p>
-                            ) : (
-                              <p className="text-sm text-teal-100/90">CPA: ~няма оценка при нулеви конверсии</p>
-                            )}
+                            <p className="text-sm text-teal-100">CPA: ~{formatCurrencyLatin(projected.cpa, currency)}</p>
                             <p className="text-sm text-teal-100">Разход: ~{formatCurrencyLatin(projected.spend, currency)}</p>
-                            <p className="text-xs text-muted-foreground">Ориентировъчна прогноза при изпълнение на препоръките.</p>
+                            <p className="text-sm text-emerald-200">
+                              Прогнозно спестяване: {formatCurrencyLatin(projected.savings, currency)}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              Очакван performance boost: ~{projected.cpaLiftPercent}% по-нисък CPA след изпълнение.
+                            </p>
                           </>
                         ) : (
-                          <p className="text-sm text-muted-foreground">Няма достатъчно данни за прогноза.</p>
+                          <p className="text-xs text-muted-foreground">
+                            Данните са налични, но липсва достатъчна база за точна прогноза (например CPA/target CPA = 0).
+                          </p>
                         )}
                       </div>
                     </div>
-                  </section>
-                ) : null}
+                  ) : (
+                    <div className="rounded-md border border-dashed border-border/70 bg-background/40 p-3">
+                      <p className="text-sm font-medium text-foreground">Data Fetching</p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Изчакваме текущи стойности за Current CPA, Target CPA и Current Spend от кампанията.
+                      </p>
+                    </div>
+                  )}
+                </section>
               </>
             )}
           </div>

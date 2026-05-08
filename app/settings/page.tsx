@@ -235,19 +235,20 @@ export default function SettingsPage() {
   }, [googleStatus?.accountId]);
 
   return (
-    <main className="w-full space-y-3">
+    <main className="mx-auto w-full max-w-7xl space-y-6">
       <Card className="w-full">
         <CardHeader>
           <CardTitle>Настройки</CardTitle>
           <CardDescription>Интелигентен onboarding за цели и рекламни интеграции.</CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4 p-4 sm:p-6">
-          <Card className="w-full border-border/60 bg-slate-950/30">
-            <CardHeader>
-              <CardTitle className="text-base">Бизнес цели</CardTitle>
-              <CardDescription>Настрой KPI таргетите, които AI ще използва за оптимизация.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3 p-4 sm:p-5">
+        <CardContent className="space-y-8 p-4 sm:p-6">
+          <section className="space-y-4">
+            <div className="space-y-1">
+              <h2 className="text-base font-semibold">Бизнес цели</h2>
+              <p className="text-sm text-muted-foreground">Настрой KPI таргетите, които AI ще използва за оптимизация.</p>
+            </div>
+            <div className="rounded-xl bg-muted/50 p-4 sm:p-5">
+              <div className="space-y-3">
               <div className="grid gap-3 md:grid-cols-2">
                 <div className="space-y-2">
                   <p className="text-sm font-medium">Target CPA (EUR)</p>
@@ -290,16 +291,17 @@ export default function SettingsPage() {
                 <Save className="mr-1 h-4 w-4" />
                 Запази бизнес целите
               </Button>
-            </CardContent>
-          </Card>
+              </div>
+            </div>
+          </section>
 
-          <Card className="w-full border-border/60 bg-slate-950/30">
-            <CardHeader>
-              <CardTitle className="text-base">Интеграции</CardTitle>
-              <CardDescription>Свържи рекламните платформи и избери правилните акаунти.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4 p-4 sm:p-5">
-              <div className="space-y-3 rounded-lg border border-border/60 p-3">
+          <section className="space-y-4">
+            <div className="space-y-1">
+              <h2 className="text-base font-semibold">Интеграции</h2>
+              <p className="text-sm text-muted-foreground">Свържи рекламните платформи и избери правилните акаунти.</p>
+            </div>
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              <div className="space-y-3 rounded-xl bg-muted/50 p-4">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <p className="text-sm font-medium">Meta (Facebook Ads)</p>
                   <PlatformStatusBadge
@@ -307,6 +309,7 @@ export default function SettingsPage() {
                     needsReconnect={metaNeedsReconnect}
                     accountName={connectedMetaAccountName}
                     fallbackAccountId={metaStatus?.accountId}
+                    loading={statusLoading}
                   />
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -348,7 +351,7 @@ export default function SettingsPage() {
                 )}
               </div>
 
-              <div className="space-y-3 rounded-lg border border-border/60 p-3">
+              <div className="space-y-3 rounded-xl bg-muted/50 p-4">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <p className="text-sm font-medium">Google Ads</p>
                   <PlatformStatusBadge
@@ -356,6 +359,7 @@ export default function SettingsPage() {
                     needsReconnect={googleNeedsReconnect}
                     accountName={connectedGoogleAccountName}
                     fallbackAccountId={googleStatus?.accountId}
+                    loading={statusLoading}
                   />
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -382,8 +386,8 @@ export default function SettingsPage() {
                   className="w-full"
                 />
               </div>
-            </CardContent>
-          </Card>
+            </div>
+          </section>
 
           {message ? <p className="text-sm text-teal-300">{message}</p> : null}
         </CardContent>
@@ -424,13 +428,19 @@ function PlatformStatusBadge({
   status,
   needsReconnect,
   accountName,
-  fallbackAccountId
+  fallbackAccountId,
+  loading
 }: {
   status: PlatformConnectionStatus | null;
   needsReconnect: boolean;
   accountName: string | null;
   fallbackAccountId: string | null | undefined;
+  loading?: boolean;
 }) {
+  if (loading) {
+    return <span className="inline-flex h-7 w-44 animate-pulse rounded-full bg-muted" aria-hidden="true" />;
+  }
+
   const connected = Boolean(status?.isConnected) && !needsReconnect;
   const badgeClass = connected
     ? "border-emerald-400/40 bg-emerald-500/10 text-emerald-200"
