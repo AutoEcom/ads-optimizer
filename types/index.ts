@@ -80,6 +80,11 @@ export type ExecutableMetaTool = {
 };
 
 export type PrioritizedAction = {
+  /** Стабилен ключ в `ai_strategy_cache` и в URL към `/creative` (`actionId`). */
+  id?: string;
+  /** След успешен publish на креатив по препоръката — скрива се от одит UI, остава в лога. */
+  status?: "open" | "resolved";
+  resolvedAt?: string;
   task: string;
   impactScore: number;
   reason: string;

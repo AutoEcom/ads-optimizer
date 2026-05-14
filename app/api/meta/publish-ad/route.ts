@@ -4,7 +4,9 @@ import { getAdPlatformTokenRow } from "@/lib/ad-platform-token-server";
 import { addCredits, CREDIT_COSTS, deductCredits } from "@/lib/credits";
 import { createAdVariant } from "@/lib/meta-ads";
 import { fetchCampaignAdAccountId, metaAdAccountsMatch } from "@/lib/meta-api";
+import { getPrioritizedActionStableId } from "@/lib/prioritized-action-id";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import type { PrioritizedAction } from "@/types";
 
 export const dynamic = "force-dynamic";
 
@@ -14,6 +16,9 @@ type Body = {
   headline?: string;
   body_text?: string;
   text?: string;
+  /** Стабилен ключ от `/creative?actionId=…` — маркира препоръката като изпълнена в `ai_strategy_cache`. */
+  resolved_action_id?: string;
+  campaign_name?: string;
 };
 
 export async function POST(request: Request) {
@@ -67,8 +72,88 @@ export async function POST(request: Request) {
     );
   }
 
+  const resolvedActionId =
+    typeof body.resolved_action_id === "string" ? body.resolved_action_id.trim() : "";
+  const campaignNameForLog =
+    typeof body.campaign_name === "string" && body.campaign_name.trim()
+      ? body.campaign_name.trim()
+      : campaignId;
+
   try {
     const result = await createAdVariant(tokenResult.accessToken, campaignId, headline, bodyText);
+
+    try {
+      if (resolvedActionId) {
+        const { data: cacheRow, error: cacheFetchErr } = await supabase
+          .from("ai_strategy_cache")
+          .select("priority_actions")
+          .eq("user_id", user.id)
+          .maybeSingle();
+
+        if (!cacheFetchErr && cacheRow?.priority_actions) {
+          const raw = cacheRow.priority_actions as {
+            prioritizedActions?: unknown[];
+            killList?: unknown[];
+          };
+          const list = Array.isArray(raw.prioritizedActions) ? raw.prioritizedActions : [];
+          let matched = false;
+          const nextActions = list.map((entry) => {
+            const a = entry as PrioritizedAction;
+            const sid = getPrioritizedActionStableId(a);
+            if (sid === resolvedActionId || (typeof a.id === "string" && a.id.trim() === resolvedActionId)) {
+              matched = true;
+              return {
+                ...a,
+                id: sid,
+                status: "resolved" as const,
+                resolvedAt: new Date().toISOString()
+              };
+            }
+            return { ...a, id: sid };
+          });
+          if (matched) {
+            const killList = Array.isArray(raw.killList) ? raw.killList : [];
+            const { error: cacheUpdErr } = await supabase
+              .from("ai_strategy_cache")
+              .update({
+                priority_actions: { prioritizedActions: nextActions, killList }
+              })
+              .eq("user_id", user.id);
+            if (cacheUpdErr) {
+              console.warn("[api/meta/publish-ad] ai_strategy_cache update:", cacheUpdErr.message);
+            }
+          }
+        } else if (cacheFetchErr) {
+          console.warn("[api/meta/publish-ad] ai_strategy_cache fetch:", cacheFetchErr.message);
+        }
+      }
+
+      const logReason =
+        resolvedActionId.length > 0
+          ? `Публикувана е нова Meta обява по AI препоръка. Заглавие: ${headline.slice(0, 160)}${headline.length > 160 ? "…" : ""}`
+          : `Публикувана е нова Meta обява. Заглавие: ${headline.slice(0, 160)}${headline.length > 160 ? "…" : ""}`;
+
+      const { error: logError } = await supabase.from("execution_logs").insert({
+        user_id: user.id,
+        platform: "Meta",
+        campaign_id: campaignId,
+        campaign_name: campaignNameForLog,
+        action_taken: "META_PUBLISH_CREATIVE",
+        reason: logReason,
+        details: {
+          ad_id: result.adId,
+          creative_id: result.creativeId,
+          ad_set_id: result.adSetId,
+          resolved_action_id: resolvedActionId || null,
+          status: "success"
+        }
+      });
+      if (logError) {
+        console.warn("[api/meta/publish-ad] execution_logs insert:", logError.message);
+      }
+    } catch (sideEffectErr) {
+      console.warn("[api/meta/publish-ad] post-publish side effects:", sideEffectErr);
+    }
 
     return NextResponse.json({
       success: true,

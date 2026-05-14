@@ -20,6 +20,7 @@ import { TypewriterInsight } from "@/components/ai/typewriter-insight";
 import { GroupedActionCard } from "@/components/ads/grouped-action-card";
 import { PrioritizedActionAlert } from "@/components/ads/prioritized-action-alert";
 import { groupActionsByType, isPrioritizedActionGroup } from "@/lib/action-utils";
+import { filterUnresolvedPrioritizedActions } from "@/lib/prioritized-action-id";
 import {
   CampaignPlatformGlyph,
   ImpactScorePill
@@ -57,7 +58,10 @@ import { fetchAdsPlatformData } from "@/lib/client-ads";
 import { formatSlashDatesToBulgarian } from "@/lib/format-insight-text";
 import { cn, formatCurrency } from "@/lib/utils";
 import { executeCampaignAction, runDeepAudit, runHealthAudit } from "@/services/ai-service";
-import { fetchAiStrategyCache } from "@/services/ai-strategy-cache-service";
+import {
+  AI_STRATEGY_CACHE_INVALIDATE_EVENT,
+  fetchAiStrategyCache
+} from "@/services/ai-strategy-cache-service";
 import { getCampaignsByPlatform } from "@/services/mock-data";
 import { AuditInsight, CampaignMetrics, SkillType } from "@/types";
 
@@ -131,6 +135,23 @@ export default function AuditPage() {
     void loadCachedAudit();
     return () => {
       cancelled = true;
+    };
+  }, [hasLinkedAdAccounts]);
+
+  useEffect(() => {
+    if (!hasLinkedAdAccounts) return;
+    const onInvalidate = () => {
+      void (async () => {
+        const row = await fetchAiStrategyCache();
+        if (row) {
+          setHealthAudit(row.insight);
+          setAiAuditUpdatedAt(row.lastGeneratedAt);
+        }
+      })();
+    };
+    window.addEventListener(AI_STRATEGY_CACHE_INVALIDATE_EVENT, onInvalidate as EventListener);
+    return () => {
+      window.removeEventListener(AI_STRATEGY_CACHE_INVALIDATE_EVENT, onInvalidate as EventListener);
     };
   }, [hasLinkedAdAccounts]);
 
@@ -228,21 +249,25 @@ export default function AuditPage() {
     }
   }
 
+  const openPrioritizedActions = useMemo(
+    () => filterUnresolvedPrioritizedActions(healthAudit?.prioritizedActions ?? []),
+    [healthAudit?.prioritizedActions]
+  );
+
   const killCampaigns = (healthAudit?.killList ?? [])
     .map((item) => allCampaigns.find((campaign) => campaign.id === item.campaignId))
     .filter((campaign): campaign is CampaignMetrics => Boolean(campaign));
   const activatedSkillTypes = Array.from(
-    new Set((healthAudit?.prioritizedActions ?? []).map((action) => action.type).filter(Boolean))
+    new Set(openPrioritizedActions.map((action) => action.type).filter(Boolean))
   ) as SkillType[];
 
   const budgetSufficiencyAlertCount = useMemo(
-    () =>
-      (healthAudit?.prioritizedActions ?? []).filter((action) => action.type === "BUDGET_SUFFICIENCY").length,
-    [healthAudit?.prioritizedActions]
+    () => openPrioritizedActions.filter((action) => action.type === "BUDGET_SUFFICIENCY").length,
+    [openPrioritizedActions]
   );
   const prioritizedDisplayList = useMemo(
-    () => groupActionsByType(healthAudit?.prioritizedActions ?? []),
-    [healthAudit?.prioritizedActions]
+    () => groupActionsByType(openPrioritizedActions),
+    [openPrioritizedActions]
   );
   const pulseBudgetSufficiency = budgetSufficiencyAlertCount > 0;
 

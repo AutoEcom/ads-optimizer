@@ -1,5 +1,14 @@
+import { getPrioritizedActionStableId } from "@/lib/prioritized-action-id";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
-import type { AuditInsight } from "@/types";
+import type { AuditInsight, PrioritizedAction } from "@/types";
+
+/** Синхронизира клиенти след resolve в publish-ad (Supabase cache). */
+export const AI_STRATEGY_CACHE_INVALIDATE_EVENT = "adsoptimizer:ai-strategy-cache-invalidate";
+
+export function dispatchAiStrategyCacheInvalidate(): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(AI_STRATEGY_CACHE_INVALIDATE_EVENT));
+}
 
 type PriorityActionsPayload = {
   prioritizedActions: AuditInsight["prioritizedActions"];
@@ -17,7 +26,11 @@ function parseInsight(row: {
   last_generated_at: string;
 }): AiStrategyCacheLoaded | null {
   const raw = row.priority_actions as Partial<PriorityActionsPayload> | null;
-  const prioritizedActions = Array.isArray(raw?.prioritizedActions) ? raw.prioritizedActions : [];
+  const prioritizedActionsRaw = Array.isArray(raw?.prioritizedActions) ? raw.prioritizedActions : [];
+  const prioritizedActions = prioritizedActionsRaw.map((a) => {
+    const action = a as PrioritizedAction;
+    return { ...action, id: getPrioritizedActionStableId(action) };
+  });
   const killList = Array.isArray(raw?.killList) ? raw.killList : [];
   const healthScore = Number(row.health_score);
   if (!Number.isFinite(healthScore)) return null;
@@ -65,7 +78,10 @@ export async function saveAiStrategyCache(insight: AuditInsight): Promise<void> 
   if (!user) return;
 
   const priority_actions: PriorityActionsPayload = {
-    prioritizedActions: insight.prioritizedActions ?? [],
+    prioritizedActions: (insight.prioritizedActions ?? []).map((a) => ({
+      ...a,
+      id: getPrioritizedActionStableId(a)
+    })),
     killList: insight.killList ?? []
   };
 

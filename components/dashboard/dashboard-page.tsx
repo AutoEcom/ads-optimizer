@@ -26,8 +26,7 @@ import { PrioritizedActionAlert } from "@/components/ads/prioritized-action-aler
 import { groupActionsByType, isPrioritizedActionGroup } from "@/lib/action-utils";
 import {
   CampaignPlatformGlyph,
-  ImpactScorePill,
-  PlatformCornerBadge
+  ImpactScorePill
 } from "@/components/ads/platform-icons";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
@@ -65,7 +64,10 @@ import {
   runDeepAudit,
   runHealthAudit
 } from "@/services/ai-service";
-import { fetchAiStrategyCache } from "@/services/ai-strategy-cache-service";
+import {
+  AI_STRATEGY_CACHE_INVALIDATE_EVENT,
+  fetchAiStrategyCache
+} from "@/services/ai-strategy-cache-service";
 import { getDigestTrend } from "@/services/daily-snapshot-service";
 import {
   emptyMorningDigest,
@@ -74,6 +76,7 @@ import {
 } from "@/services/mock-data";
 import { fetchAdsPlatformData } from "@/lib/client-ads";
 import { formatSlashDatesToBulgarian } from "@/lib/format-insight-text";
+import { filterUnresolvedPrioritizedActions } from "@/lib/prioritized-action-id";
 import { cn, formatCurrency, formatCurrencyLatin } from "@/lib/utils";
 import { AuditInsight, CampaignMetrics, CriticalIssue } from "@/types";
 
@@ -245,9 +248,14 @@ export function DashboardPage() {
     return healthAudit.killList.reduce((sum, item) => sum + item.spend, 0);
   }, [healthAudit]);
 
-  const prioritizedDisplayList = useMemo(
-    () => groupActionsByType(healthAudit?.prioritizedActions ?? []),
+  const openPrioritizedActions = useMemo(
+    () => filterUnresolvedPrioritizedActions(healthAudit?.prioritizedActions ?? []),
     [healthAudit?.prioritizedActions]
+  );
+
+  const prioritizedDisplayList = useMemo(
+    () => groupActionsByType(openPrioritizedActions),
+    [openPrioritizedActions]
   );
 
   const groupAlertsCount = useMemo(
@@ -318,6 +326,23 @@ export function DashboardPage() {
     void loadCachedPriorities();
     return () => {
       cancelled = true;
+    };
+  }, [hasLinkedAdAccounts]);
+
+  useEffect(() => {
+    if (!hasLinkedAdAccounts) return;
+    const onInvalidate = () => {
+      void (async () => {
+        const row = await fetchAiStrategyCache();
+        if (row) {
+          setHealthAudit(row.insight);
+          setAiPrioritiesUpdatedAt(row.lastGeneratedAt);
+        }
+      })();
+    };
+    window.addEventListener(AI_STRATEGY_CACHE_INVALIDATE_EVENT, onInvalidate as EventListener);
+    return () => {
+      window.removeEventListener(AI_STRATEGY_CACHE_INVALIDATE_EVENT, onInvalidate as EventListener);
     };
   }, [hasLinkedAdAccounts]);
 
@@ -709,10 +734,7 @@ export function DashboardPage() {
               <div className="mt-2 space-y-2">
                 {(healthAudit?.killList ?? []).slice(0, 5).map((item) => (
                   <Alert key={item.campaignId} className="relative border-red-500/50 bg-red-500/5 pt-2">
-                    <div className="absolute right-3 top-3 z-[1]">
-                      <PlatformCornerBadge platform={item.platform} metaPlacement={item.metaPlacement} />
-                    </div>
-                    <AlertTitle className="flex flex-wrap items-center gap-2 pr-20">
+                    <AlertTitle className="flex flex-wrap items-center gap-2">
                       <CampaignPlatformGlyph platform={item.platform} metaPlacement={item.metaPlacement} />
                       <span>{item.campaignName}</span>
                     </AlertTitle>
@@ -777,10 +799,7 @@ export function DashboardPage() {
             const related = allCampaigns.find((c) => c.id === issue.campaignId);
             return (
               <Alert key={issue.id} className="relative border-red-500/50 bg-red-500/5 pt-2">
-                <div className="absolute right-3 top-3 z-[1]">
-                  <PlatformCornerBadge platform={issue.platform} metaPlacement={related?.metaPlacement} />
-                </div>
-                <AlertTitle className="flex flex-wrap items-center gap-2 pr-20">
+                <AlertTitle className="flex flex-wrap items-center gap-2">
                   <CampaignPlatformGlyph platform={issue.platform} metaPlacement={related?.metaPlacement} />
                   <span>
                     {issue.severity}: {issue.title}

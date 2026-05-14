@@ -40,6 +40,8 @@ function actionTakenLabelBg(action: LogAction): string {
       return "MCP · пауза";
     case "MCP_RENAME":
       return "MCP · име";
+    case "META_PUBLISH_CREATIVE":
+      return "Публикуване · креатив";
     default:
       return String(action);
   }

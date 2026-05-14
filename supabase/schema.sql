@@ -166,7 +166,8 @@ create table if not exists public.execution_logs (
         'ACTIVATE',
         'MCP_ADJUST_BUDGET',
         'MCP_PAUSE',
-        'MCP_RENAME'
+        'MCP_RENAME',
+        'META_PUBLISH_CREATIVE'
       )
     ),
   reason text not null,
