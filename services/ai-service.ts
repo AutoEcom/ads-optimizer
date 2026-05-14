@@ -95,9 +95,19 @@ export async function runHealthAudit(
   });
 
   if (!response.ok) {
+    if (response.status === 402) {
+      throw new Error("INSUFFICIENT_CREDITS");
+    }
     throw new Error("Неуспешен AI health одит.");
   }
-  const result = sanitizeAuditInsightMcp((await response.json()) as AuditInsight);
+  const raw = (await response.json()) as AuditInsight & { creditsBalance?: number };
+  const result = sanitizeAuditInsightMcp({
+    campaignId: raw.campaignId,
+    healthScore: raw.healthScore,
+    prioritizedActions: raw.prioritizedActions ?? [],
+    killList: raw.killList ?? [],
+    creditsBalance: raw.creditsBalance
+  });
 
   await saveAiStrategyCache(result);
 
@@ -153,8 +163,8 @@ export async function executeCampaignAction(args: {
 
 export async function generateAdVariations(
   productDescription: string
-): Promise<AdVariation[]> {
-  const response = await fetch("/api/ai/generate", {
+): Promise<{ variants: AdVariation[]; creditsBalance?: number }> {
+  const response = await fetch("/api/ai/creative/generate", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -165,15 +175,26 @@ export async function generateAdVariations(
   });
 
   if (!response.ok) {
-    let detail = `HTTP ${response.status}`;
+    let j: { error?: string; code?: string } = {};
     try {
-      const j = (await response.json()) as { error?: string };
-      if (j?.error && typeof j.error === "string") detail = j.error;
+      j = (await response.json()) as { error?: string; code?: string };
     } catch {
-      /* игнорираме */
+      /* ignore */
     }
+    if (response.status === 402 || j.code === "INSUFFICIENT_CREDITS") {
+      throw new Error("INSUFFICIENT_CREDITS");
+    }
+    const detail = j?.error && typeof j.error === "string" ? j.error : `HTTP ${response.status}`;
     throw new Error(detail || "Неуспешно генериране на рекламни варианти.");
   }
 
-  return (await response.json()) as AdVariation[];
+  const raw: unknown = await response.json();
+  if (Array.isArray(raw)) {
+    return { variants: raw as AdVariation[] };
+  }
+  if (raw && typeof raw === "object") {
+    const o = raw as { variants?: AdVariation[]; creditsBalance?: number };
+    return { variants: o.variants ?? [], creditsBalance: o.creditsBalance };
+  }
+  return { variants: [] };
 }

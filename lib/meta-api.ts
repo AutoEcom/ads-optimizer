@@ -68,7 +68,7 @@ export function attachMetaAuthToUrl(url: URL, accessToken: string) {
   }
 }
 
-function attachMetaAuthToPayload(payload: URLSearchParams, accessToken: string) {
+export function attachMetaAuthToPayload(payload: URLSearchParams, accessToken: string) {
   payload.set("access_token", accessToken);
   const proof = generateMetaAppSecretProof(accessToken);
   if (proof) {
@@ -76,7 +76,7 @@ function attachMetaAuthToPayload(payload: URLSearchParams, accessToken: string) 
   }
 }
 
-async function metaPost(url: URL, payload: URLSearchParams) {
+export async function metaPost(url: URL, payload: URLSearchParams) {
   return fetch(url.toString(), {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },

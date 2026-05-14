@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Copy, Loader2, WandSparkles } from "lucide-react";
 
@@ -10,8 +10,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
+import { CREDIT_COSTS } from "@/lib/credits";
 import { generateAdVariations } from "@/services/ai-service";
 import { AdVariation } from "@/types";
+
+const INSUFFICIENT_CREDITS_MSG =
+  "Нямате достатъчно кредити. Моля, обновете плана си.";
 
 function buildAutoPromptFromSearchParams(params: URLSearchParams): string | null {
   const context = params.get("context");
@@ -41,7 +45,29 @@ function CreativePageInner() {
   const [productDescription, setProductDescription] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatedAds, setGeneratedAds] = useState<AdVariation[]>([]);
+  const [creditsBalance, setCreditsBalance] = useState<number | null>(null);
+  const [publishBusyIndex, setPublishBusyIndex] = useState<number | null>(null);
   const { toast } = useToast();
+
+  const campaignIdFromUrl = searchParams.get("campaignId")?.trim() ?? "";
+
+  const refreshCredits = useCallback(async () => {
+    try {
+      const res = await fetch("/api/credits", { cache: "no-store" });
+      if (!res.ok) {
+        setCreditsBalance(null);
+        return;
+      }
+      const j = (await res.json()) as { creditsBalance?: number };
+      setCreditsBalance(typeof j.creditsBalance === "number" ? j.creditsBalance : 0);
+    } catch {
+      setCreditsBalance(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshCredits();
+  }, [refreshCredits, queryKey]);
 
   useEffect(() => {
     const next = buildAutoPromptFromSearchParams(new URLSearchParams(queryKey));
@@ -56,18 +82,96 @@ function CreativePageInner() {
     });
   };
 
+  const canAffordGenerate = creditsBalance === null || creditsBalance >= CREDIT_COSTS.AI_CREATIVE_GENERATION;
+  const canAffordPublish = creditsBalance === null || creditsBalance >= CREDIT_COSTS.DIRECT_META_PUBLISH;
+
   async function handleGenerate() {
     if (!productDescription.trim()) return;
+    if (creditsBalance !== null && creditsBalance < CREDIT_COSTS.AI_CREATIVE_GENERATION) {
+      toast({ title: "Кредити", description: INSUFFICIENT_CREDITS_MSG });
+      return;
+    }
     setIsGenerating(true);
     try {
-      const results = await generateAdVariations(productDescription.trim());
-      setGeneratedAds(results);
+      const { variants, creditsBalance: nextBal } = await generateAdVariations(productDescription.trim());
+      setGeneratedAds(variants);
+      if (typeof nextBal === "number") setCreditsBalance(nextBal);
+      else void refreshCredits();
     } catch (error) {
       const message =
-        error instanceof Error ? error.message : "Неуспешно генериране. Провери Anthropic ключ и модела.";
-      toast({ title: "Грешка от AI", description: message });
+        error instanceof Error && error.message === "INSUFFICIENT_CREDITS"
+          ? INSUFFICIENT_CREDITS_MSG
+          : error instanceof Error
+            ? error.message
+            : "Неуспешно генериране. Провери Anthropic ключ и модела.";
+      toast({
+        title: error instanceof Error && error.message === "INSUFFICIENT_CREDITS" ? "Кредити" : "Грешка от AI",
+        description: message
+      });
     } finally {
       setIsGenerating(false);
+    }
+  }
+
+  async function handlePublishToMeta(variant: AdVariation, index: number) {
+    if (!campaignIdFromUrl) {
+      toast({
+        title: "Липсва кампания",
+        description: "Отвори страницата от одита с линк, който включва campaignId в URL, или го добави ръчно."
+      });
+      return;
+    }
+    if (creditsBalance !== null && creditsBalance < CREDIT_COSTS.DIRECT_META_PUBLISH) {
+      toast({ title: "Кредити", description: INSUFFICIENT_CREDITS_MSG });
+      return;
+    }
+    setPublishBusyIndex(index);
+    try {
+      const res = await fetch("/api/meta/publish-ad", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          campaign_id: campaignIdFromUrl,
+          headline: variant.headline,
+          body_text: `${variant.primaryText}\n\nHook: ${variant.hook}`
+        })
+      });
+      const payload = (await res.json()) as {
+        success?: boolean;
+        adId?: string;
+        creditsBalance?: number;
+        error?: string;
+        code?: string;
+      };
+      if (res.status === 402 || payload.code === "INSUFFICIENT_CREDITS") {
+        toast({ title: "Кредити", description: INSUFFICIENT_CREDITS_MSG });
+        return;
+      }
+      if (!res.ok || !payload.success) {
+        toast({
+          title: "Meta грешка",
+          description: payload.error ?? `HTTP ${res.status}`
+        });
+        return;
+      }
+      if (typeof payload.creditsBalance === "number") setCreditsBalance(payload.creditsBalance);
+      else void refreshCredits();
+      const logLine = JSON.stringify({
+        timestamp: new Date().toISOString(),
+        type: "creative_publish_meta_success",
+        campaignId: campaignIdFromUrl,
+        adId: payload.adId,
+        creditsBalance: payload.creditsBalance
+      });
+      console.log(logLine);
+      toast({
+        title: "Готово в Meta",
+        description: `Създадена е нова обява (PAUSED за преглед). Ad id: ${payload.adId ?? "—"}`
+      });
+    } catch {
+      toast({ title: "Мрежа", description: "Неуспешна връзка към сървъра." });
+    } finally {
+      setPublishBusyIndex(null);
     }
   }
 
@@ -81,8 +185,16 @@ function CreativePageInner() {
           </CardTitle>
           <CardDescription>
             Генерирай варианти от кратък бриф. При отваряне от одит полето се попълва от параметрите в URL
-            (campaignId, campaignName, context).
+            (campaignId, campaignName, context). Публикуване в Meta: {CREDIT_COSTS.DIRECT_META_PUBLISH} кредита;
+            генерация: {CREDIT_COSTS.AI_CREATIVE_GENERATION} кредита.
           </CardDescription>
+          {creditsBalance !== null ? (
+            <p className="text-sm text-muted-foreground">
+              Текущ баланс: <span className="font-semibold text-foreground">{creditsBalance}</span> кредита
+            </p>
+          ) : (
+            <p className="text-sm text-muted-foreground">Зареждане на кредити…</p>
+          )}
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
@@ -91,13 +203,19 @@ function CreativePageInner() {
               value={productDescription}
               onChange={(event) => setProductDescription(event.target.value)}
               placeholder="Опиши продукта, офертата или редактирай брифа от AI препоръката"
-              disabled={isGenerating}
+              disabled={isGenerating || !canAffordGenerate}
             />
             <div className="flex shrink-0 flex-col gap-1.5 sm:min-w-[200px]">
               <Button
                 className="w-full sm:w-auto"
-                onClick={() => void handleGenerate()}
-                disabled={isGenerating}
+                onClick={() => {
+                  if (!canAffordGenerate) {
+                    toast({ title: "Кредити", description: INSUFFICIENT_CREDITS_MSG });
+                    return;
+                  }
+                  void handleGenerate();
+                }}
+                disabled={isGenerating || !canAffordGenerate}
               >
                 {isGenerating ? (
                   <>
@@ -149,7 +267,7 @@ function CreativePageInner() {
                       <p className="text-teal-300">
                         Hook: <TypewriterInsight text={variant.hook} />
                       </p>
-                      <div className="flex gap-2">
+                      <div className="flex flex-wrap gap-2">
                         <Button size="sm" variant="ghost" onClick={() => void copyToClipboard(variant.headline)}>
                           <Copy className="mr-1 h-3.5 w-3.5" /> Заглавие
                         </Button>
@@ -157,6 +275,36 @@ function CreativePageInner() {
                           <Copy className="mr-1 h-3.5 w-3.5" /> Текст
                         </Button>
                       </div>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="w-full border border-primary/30"
+                        disabled={
+                          publishBusyIndex !== null ||
+                          !canAffordPublish ||
+                          !campaignIdFromUrl
+                        }
+                        onClick={() => {
+                          if (!canAffordPublish) {
+                            toast({
+                              title: "Кредити",
+                              description: INSUFFICIENT_CREDITS_MSG
+                            });
+                            return;
+                          }
+                          void handlePublishToMeta(variant, index);
+                        }}
+                      >
+                        {publishBusyIndex === index ? (
+                          <>
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            Публикуване…
+                          </>
+                        ) : (
+                          `Публикувай в Meta (-${CREDIT_COSTS.DIRECT_META_PUBLISH} кредита)`
+                        )}
+                      </Button>
                     </CardContent>
                   </Card>
                 ))}

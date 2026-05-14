@@ -200,6 +200,36 @@ create table if not exists public.profiles (
 alter table public.profiles
   add column if not exists ai_requests_period_start date not null default date_trunc('month', now())::date;
 
+alter table public.profiles
+  add column if not exists credits_balance integer not null default 50;
+
+comment on column public.profiles.credits_balance is 'AI/Meta действия: одит, генерация, публикуване (виж lib/credits.ts).';
+
+-- Одит на удръжки на кредити (виж lib/credits.ts deductCredits)
+create table if not exists public.credit_transactions (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  amount integer not null check (amount > 0),
+  balance_after integer not null,
+  action_type text not null,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists credit_transactions_user_id_created_at_idx
+  on public.credit_transactions (user_id, created_at desc);
+
+alter table public.credit_transactions enable row level security;
+
+drop policy if exists "Credit transactions са видими само за собственика" on public.credit_transactions;
+create policy "Credit transactions са видими само за собственика"
+  on public.credit_transactions for select
+  using (auth.uid() = user_id);
+
+drop policy if exists "Credit transactions се вмъкват само от собственика" on public.credit_transactions;
+create policy "Credit transactions се вмъкват само от собственика"
+  on public.credit_transactions for insert
+  with check (auth.uid() = user_id);
+
 alter table public.profiles enable row level security;
 
 drop policy if exists "Профилите са видими само за собственика" on public.profiles;
@@ -229,13 +259,14 @@ security definer
 set search_path = public
 as $$
 begin
-  insert into public.profiles (id, full_name, subscription_tier, ai_requests_count, ai_requests_period_start)
+  insert into public.profiles (id, full_name, subscription_tier, ai_requests_count, ai_requests_period_start, credits_balance)
   values (
     new.id,
     coalesce(new.raw_user_meta_data ->> 'full_name', ''),
     'beta',
     0,
-    date_trunc('month', now())::date
+    date_trunc('month', now())::date,
+    100
   )
   on conflict (id) do nothing;
   return new;

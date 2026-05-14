@@ -62,6 +62,8 @@ export type AuditInsight = {
   healthScore: number;
   prioritizedActions: PrioritizedAction[];
   killList: KillListItem[];
+  /** Връща се от /api/ai/audit след успешен одит. */
+  creditsBalance?: number;
 };
 
 export type ExecutableMetaToolName = "adjust_budget" | "pause_campaign" | "rename_campaign";
@@ -161,6 +163,8 @@ export type Profile = {
   fullName: string;
   subscriptionTier: "free" | "beta" | "pro";
   aiRequestsCount: number;
+  /** Баланс кредити (AI одит, генерация, Meta публикуване). */
+  creditsBalance?: number;
 };
 
 export type PlatformToken = {

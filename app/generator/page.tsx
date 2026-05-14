@@ -38,8 +38,8 @@ export default function GeneratorPage() {
     if (!productDescription.trim()) return;
     setIsGenerating(true);
     try {
-      const results = await generateAdVariations(productDescription.trim());
-      setGeneratedAds(results);
+      const { variants } = await generateAdVariations(productDescription.trim());
+      setGeneratedAds(variants);
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Неуспешно генериране. Провери Anthropic ключ и модела.";
