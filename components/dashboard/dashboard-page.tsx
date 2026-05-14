@@ -411,7 +411,7 @@ export function DashboardPage() {
       `CPA ${campaign.cpa ? formatCurrency(campaign.cpa, campaign.currencyCode) : "няма стойност"}. ` +
       "Създай нов рекламен текст с ясен CTA и фокус върху по-висока конверсия.";
 
-    const next = `/generator?prefill=${encodeURIComponent(autoFilledPrompt)}` as Route;
+    const next = `/creative?prefill=${encodeURIComponent(autoFilledPrompt)}` as Route;
     router.push(next);
   };
 

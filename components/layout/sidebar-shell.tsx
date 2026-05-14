@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils";
 const navItems: Array<{ href: Route; label: string; icon: typeof Home }> = [
   { href: "/dashboard", label: "Табло", icon: Home },
   { href: "/audit", label: "Одит", icon: BarChart3 },
-  { href: "/generator", label: "Креатив", icon: WandSparkles },
+  { href: "/creative", label: "Креатив", icon: WandSparkles },
   { href: "/history", label: "Лог", icon: History },
   { href: "/settings", label: "Настройки", icon: Settings }
 ];

@@ -149,21 +149,23 @@ export function buildHeuristicActions(
       });
     } else if (
       campaign.platform === "Meta" &&
-      freq != null &&
-      freq > FREQUENCY_AUDIENCE_WARN &&
-      engagementEarly
+      engagementEarly &&
+      typeof campaign.last7DaysFrequency === "number" &&
+      Number.isFinite(campaign.last7DaysFrequency) &&
+      campaign.last7DaysFrequency > FREQUENCY_AUDIENCE_WARN
     ) {
-      const cpm = campaign.cpmMajor;
+      const freq7 = campaign.last7DaysFrequency;
+      const cpm7 = campaign.last7DaysCpm;
       const cpmBit =
-        typeof cpm === "number" && Number.isFinite(cpm) && cpm > 0
-          ? ` CPM ${cpm.toFixed(2)} подсказва натиск по аукциона/ограничена аудитория.`
+        typeof cpm7 === "number" && Number.isFinite(cpm7) && cpm7 > 0
+          ? ` 7-дневен CPM ${cpm7.toFixed(2)} (last_7_days).`
           : "";
       actions.push({
         task: `Прегледай аудиторията за ${campaign.campaignName}`,
         impactScore: 68,
-        reason: `Frequency ${freq.toFixed(
+        reason: `7-дневна frequency ${freq7.toFixed(
           2
-        )} (данни ~30 дни) при >${ENGAGEMENT_IMPRESSIONS_MIN} импресии и 0 конверсии: риск от audience overlap или твърде тясна аудитория.${cpmBit}`,
+        )} > ${FREQUENCY_AUDIENCE_WARN} (Meta date_preset=last_7_days) при >${ENGAGEMENT_IMPRESSIONS_MIN} импресии и 0 конверсии: риск от audience overlap или твърде тясна аудитория.${cpmBit}`,
         platform: "Meta",
         metaPlacement: campaign.metaPlacement,
         campaignId: campaign.id,

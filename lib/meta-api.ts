@@ -302,9 +302,10 @@ export async function fetchMetaCampaigns(
     fetchMetaAccountTotalSpend(normalizedAccount, accessToken),
     Promise.all(
       campaignsPayload.data.map(async (campaign) => {
-      const [insights, platformSpend] = await Promise.all([
+      const [insights, platformSpend, last7Audience] = await Promise.all([
         fetchCampaignInsights(campaign.id, accessToken),
-        fetchPublisherPlatformBreakdown(campaign.id, accessToken)
+        fetchPublisherPlatformBreakdown(campaign.id, accessToken),
+        fetchCampaignInsightsLast7Days(campaign.id, accessToken)
       ]);
       rawMetaResponse[campaign.id] = insights;
       const metaPlacement = inferMetaPlacement(platformSpend);
@@ -351,6 +352,10 @@ export async function fetchMetaCampaigns(
         impressions,
         ...(cpcMajor != null && cpcMajor > 0 ? { cpcMajor } : {}),
         ...(cpmMajor != null && cpmMajor > 0 ? { cpmMajor } : {}),
+        ...(last7Audience.last7DaysFrequency !== undefined
+          ? { last7DaysFrequency: last7Audience.last7DaysFrequency }
+          : {}),
+        ...(last7Audience.last7DaysCpm !== undefined ? { last7DaysCpm: last7Audience.last7DaysCpm } : {}),
         frequency,
         targetCpa,
         metaPlacement
@@ -499,6 +504,36 @@ export async function fetchCreativePerformance(
     roas: Number(row.purchase_roas?.[0]?.value ?? 0),
     spend: Number(row.spend ?? 0)
   }));
+}
+
+async function fetchCampaignInsightsLast7Days(
+  campaignId: string,
+  accessToken: string
+): Promise<{ last7DaysFrequency?: number; last7DaysCpm?: number }> {
+  const insightsUrl = new URL(`https://graph.facebook.com/${META_API_VERSION}/${campaignId}/insights`);
+  insightsUrl.searchParams.set("fields", "spend,impressions,frequency");
+  insightsUrl.searchParams.set("date_preset", "last_7_days");
+  attachMetaAuthToUrl(insightsUrl, accessToken);
+  const res = await fetch(insightsUrl.toString(), { cache: "no-store" });
+  if (res.status === 401) {
+    return {};
+  }
+  if (!res.ok) {
+    return {};
+  }
+  const payload = (await res.json()) as { data?: MetaInsights[] };
+  const row = payload.data?.[0];
+  if (!row) return {};
+  const spend = Number(row.spend ?? 0);
+  const impressions = Number(row.impressions ?? 0);
+  const fr = row.frequency != null && String(row.frequency).trim() !== "" ? Number(row.frequency) : NaN;
+  const last7DaysFrequency = Number.isFinite(fr) ? fr : undefined;
+  const last7DaysCpm =
+    impressions > 0 && spend >= 0 ? Number(((spend / impressions) * 1000).toFixed(4)) : undefined;
+  const out: { last7DaysFrequency?: number; last7DaysCpm?: number } = {};
+  if (last7DaysFrequency !== undefined) out.last7DaysFrequency = last7DaysFrequency;
+  if (last7DaysCpm !== undefined && last7DaysCpm > 0) out.last7DaysCpm = last7DaysCpm;
+  return out;
 }
 
 async function fetchCampaignInsights(campaignId: string, accessToken: string): Promise<MetaInsights> {

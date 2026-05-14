@@ -50,6 +50,25 @@ export function parseExecutableToolFromAgentJson(raw: unknown): ExecutableMetaTo
 
 /** Премахва невалидни MCP инструменти (платформа, campaign id, параметри). */
 export function sanitizePrioritizedActionMcp(action: PrioritizedAction): PrioritizedAction {
+  const isCreativeRedirectType =
+    action.type === "CREATIVE_FATIGUE" || action.type === "AD_COPY_RELEVANCE";
+
+  if (isCreativeRedirectType) {
+    const next: PrioritizedAction = { ...action };
+    delete next.executable_tool;
+    const recommendation = (
+      typeof action.recommendation === "string" && action.recommendation.trim()
+        ? action.recommendation
+        : action.reason
+    ).trim();
+    return {
+      ...next,
+      executable: true,
+      actionUiTemplate: "redirect_creative",
+      recommendation
+    };
+  }
+
   const parsed = parseExecutableToolFromAgentJson(action.executable_tool);
   if (!parsed) {
     const next = { ...action };

@@ -22,6 +22,8 @@ export const campaigns: CampaignMetrics[] = [
     impressions: 18200,
     frequency: 2.1,
     cpmMajor: 23.08,
+    last7DaysFrequency: 2.05,
+    last7DaysCpm: 22.5,
     targetCpa: 80
   },
   {
@@ -40,6 +42,8 @@ export const campaigns: CampaignMetrics[] = [
     frequency: 1.7,
     cpcMajor: 2.8,
     cpmMajor: 20.25,
+    last7DaysFrequency: 1.75,
+    last7DaysCpm: 19.1,
     targetCpa: 55
   },
   {

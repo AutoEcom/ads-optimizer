@@ -2,6 +2,8 @@
 
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import type { Route } from "next";
 import { Bot, Check, Layers, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { useSWRConfig } from "swr";
@@ -26,6 +28,7 @@ import {
 } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { META_ADS_SWR_KEY } from "@/hooks/use-ad-platform-connection";
+import { buildCreativePageHref } from "@/lib/creative-redirect";
 import { formatSlashDatesToBulgarian } from "@/lib/format-insight-text";
 import { buildPendingExecution, type PendingExecution } from "@/lib/meta-mcp-pending";
 import { ENGAGEMENT_INSIGHT_LABEL, getSkillAgentVisualTheme, skillTypeToAgentLabel } from "@/lib/skill-agent-labels";
@@ -179,6 +182,8 @@ export function ActionDetailSheet(props: ActionDetailSheetProps) {
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkQueue, setBulkQueue] = useState<PendingExecution[]>([]);
 
+  const router = useRouter();
+
   const group = isGroup ? props.group : null;
   const getCampaign = isGroup ? props.getCampaign : null;
 
@@ -201,6 +206,9 @@ export function ActionDetailSheet(props: ActionDetailSheetProps) {
 
   const pendingResolved = buildPendingExecution(action, campaign, targetCpa);
   const canRunAuto = Boolean(canUseMetaMcp && pendingResolved);
+
+  const isRedirectCreative = action.executable === true && action.actionUiTemplate === "redirect_creative";
+  const creativeNavigateHref = isRedirectCreative ? buildCreativePageHref(action, campaign) : null;
 
   const bulkExecutable = isGroup
     ? children
@@ -587,30 +595,49 @@ export function ActionDetailSheet(props: ActionDetailSheetProps) {
                 Изпълни всички ({bulkExecutable.length})
               </Button>
             ) : null}
-            <Button
-              type="button"
-              variant="outline"
-              className={cn(
-                "w-full",
-                executionSuccess && "border-emerald-500/50 bg-emerald-500/10 text-emerald-100 hover:bg-emerald-500/15"
-              )}
-              disabled={!canRunAuto || mcpRunning || executionSuccess}
-              title={
-                !canUseMetaMcp
-                  ? campaign?.platform === "Google"
-                    ? "MCP автоматизацията за момента е само за Meta."
-                    : "Нужна е Meta кампания и изпълнима препоръка (пауза, бюджет или rename от AI)."
-                  : undefined
-              }
-              onClick={() => {
-                if (executionSuccess) return;
-                openConfirmDialog();
-              }}
-            >
-              {mcpRunning ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-              {executionSuccess ? <Check className="mr-2 h-4 w-4 text-emerald-400" /> : null}
-              {executionSuccess ? "Изпълнено" : isGroup ? "Изпълни избраната (автоматично)" : "Изпълни автоматично"}
-            </Button>
+            {isRedirectCreative ? (
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full border-teal-500/45 bg-teal-500/10 text-teal-100 hover:bg-teal-500/15"
+                disabled={!creativeNavigateHref}
+                title={
+                  !creativeNavigateHref
+                    ? "Липсват campaignId или контекст за преход към AI креатив."
+                    : undefined
+                }
+                onClick={() => {
+                  if (creativeNavigateHref) router.push(creativeNavigateHref as Route);
+                }}
+              >
+                Генерирай с AI
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                variant="outline"
+                className={cn(
+                  "w-full",
+                  executionSuccess && "border-emerald-500/50 bg-emerald-500/10 text-emerald-100 hover:bg-emerald-500/15"
+                )}
+                disabled={!canRunAuto || mcpRunning || executionSuccess}
+                title={
+                  !canUseMetaMcp
+                    ? campaign?.platform === "Google"
+                      ? "MCP автоматизацията за момента е само за Meta."
+                      : "Нужна е Meta кампания и изпълнима препоръка (пауза, бюджет или rename от AI)."
+                    : undefined
+                }
+                onClick={() => {
+                  if (executionSuccess) return;
+                  openConfirmDialog();
+                }}
+              >
+                {mcpRunning ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                {executionSuccess ? <Check className="mr-2 h-4 w-4 text-emerald-400" /> : null}
+                {executionSuccess ? "Изпълнено" : isGroup ? "Изпълни избраната (автоматично)" : "Изпълни автоматично"}
+              </Button>
+            )}
           </div>
         </SheetContent>
       </Sheet>

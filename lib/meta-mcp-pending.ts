@@ -20,6 +20,7 @@ export function buildPendingExecution(
   campaign: CampaignMetrics | null,
   targetCpaProp?: number
 ): PendingExecution | null {
+  if (action.actionUiTemplate === "redirect_creative" && action.executable) return null;
   if (!campaign || campaign.platform !== "Meta" || !campaign.id.trim()) return null;
   const cid = campaign.id.trim();
   const cur = campaign.currencyCode ?? "EUR";

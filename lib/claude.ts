@@ -505,10 +505,12 @@ function attachCampaignPlatformTruth(
     if (!a.campaignId) return a;
     const c = byId.get(a.campaignId);
     if (!c) return a;
+    const name = c.campaignName?.trim();
     return {
       ...a,
       platform: c.platform,
-      metaPlacement: c.platform === "Meta" ? c.metaPlacement : undefined
+      metaPlacement: c.platform === "Meta" ? c.metaPlacement : undefined,
+      ...(name && !(a.campaignName && a.campaignName.trim()) ? { campaignName: name } : {})
     };
   });
 }
@@ -602,9 +604,11 @@ async function runSubAgentAudit(args: {
       "Използвай campaigns[].frequency за fatigue контекст. Google: Ad Copy / RSA релевантност. " +
       "type: CREATIVE_FATIGUE или AD_COPY_RELEVANCE. insightBasis: \"engagement\" когато основният сигнал е CTR/CPC; \"conversion\" когато водещи са CPA/ROAS.",
     Audience:
-      "EARLY-STAGE / ENGAGEMENT: при impressions > 1000 и conversions === 0 не пропускай — анализирай Frequency и CPM (campaigns[].frequency, campaigns[].cpmMajor). " +
-      "При frequency > 1.5 в наличния прозорец (insights ~30 дни; отбележи в reason ако е по-кратък рън) флагни потенциален audience overlap или твърде тясна аудитория. " +
-      "Google: Audience Signals за PMax/Display. type: AUDIENCE_BUILDER или AUDIENCE_SIGNALS. insightBasis: \"engagement\" за frequency/CPM без конверсии; \"conversion\" за CPA/ROAS.",
+      "EARLY-STAGE / ENGAGEMENT: при impressions > 1000 и conversions === 0 не пропускай. " +
+      "За Meta audience health използвай САМО 7-дневния прозорец: campaigns[].last7DaysFrequency и campaigns[].last7DaysCpm (Graph date_preset=last_7_days). " +
+      "При last7DaysFrequency > 1.5 флагни потенциален audience overlap или твърде тясна аудитория; обоснови с last7DaysCpm когато е наличен. " +
+      "Не ползвай 30-дневна frequency за overlap преценки. Google: Audience Signals за PMax/Display. " +
+      "type: AUDIENCE_BUILDER или AUDIENCE_SIGNALS. insightBasis: \"engagement\" за 7-дневни frequency/CPM без конверсии; \"conversion\" за CPA/ROAS.",
     Technical:
       "Meta: анализирай Event Match Quality и tracking quality. " +
       "Google: приложи Negative Keyword Guard за wasted spend от нерелевантни search terms. " +
@@ -650,7 +654,7 @@ async function runSubAgentAudit(args: {
       campaignIdRule:
         "campaigns[].id е Meta/Google campaign id — използвай го 1:1 в campaignId и в executable_tool.parameters.campaign_id за Meta.",
       leadingIndicators:
-        "При impressions > 1000 и conversions === 0: Early-Stage / Engagement Analysis — не пропускай кампанията; оцени CTR, CPC, frequency, CPM и задай insightBasis: \"engagement\" ако те водят препоръката."
+        "При impressions > 1000 и conversions === 0: Early-Stage / Engagement Analysis — не пропускай кампанията; оцени CTR/CPC от 30d insights, а за audience overlap ползвай само campaigns[].last7DaysFrequency и campaigns[].last7DaysCpm (last_7_days)."
     },
     campaigns
   };
@@ -669,7 +673,7 @@ async function runSubAgentAudit(args: {
         "Ти си Senior Media Buyer sub-agent. Работиш само по даден домейн и връщаш валиден JSON масив. " +
         "Фокус: рентабилност, спиране на money leaks, директен тон. Отговаряй само на български. " +
         "Критично правило: под 500 импресии = Learning — изчакване ~48ч без драстични промени. " +
-        "При над 1000 импресии и 0 конверсии: премини на Engagement Analysis (CTR, CPC, frequency, CPM) — не пропускай Meta кампания само защото няма продажби. " +
+        "При над 1000 импресии и 0 конверсии: премини на Engagement Analysis — CTR/CPC от 30d, а за audience overlap само last7DaysFrequency/last7DaysCpm (last_7_days) — не пропускай Meta кампания само защото няма продажби. " +
         "Добавяй actionType='PAUSE' и isKillRule=true само при ясен 3x Kill Rule риск.",
       messages: [
         {

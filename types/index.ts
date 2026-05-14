@@ -22,6 +22,10 @@ export type CampaignMetrics = {
   cpcMajor?: number;
   /** CPM в основна валута: spend / impressions * 1000. */
   cpmMajor?: number;
+  /** Meta insights `last_7_days` — frequency за audience health (без дневен шум). */
+  last7DaysFrequency?: number;
+  /** Meta insights `last_7_days` — CPM в основна валута. */
+  last7DaysCpm?: number;
   frequency?: number;
   impressionShare?: number;
   searchTerms?: string[];
@@ -94,6 +98,14 @@ export type PrioritizedAction = {
    * `conversion` — базирана главно на CPA/ROAS/конверсии.
    */
   insightBasis?: "engagement" | "conversion";
+  /** UI: изпълнение без Meta MCP (напр. пренасочване към креатив генератор). */
+  executable?: boolean;
+  /** UI шаблон за primary бутон. */
+  actionUiTemplate?: "redirect_creative";
+  /** Текст за query `context` при redirect_creative (обикновено обобщение на препоръката). */
+  recommendation?: string;
+  /** Име на кампания за query параметри, ако липсва live обект в клиента. */
+  campaignName?: string;
 };
 
 /** Виртуална група от ≥3 препоръки с един и същ `type` (виж `groupActionsByType`). */
