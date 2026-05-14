@@ -4,7 +4,7 @@ import {
   logSubAgentInstructions,
   logSubAgentRawLlmResponse
 } from "@/lib/agents/orchestrator";
-import { buildHeuristicActions, buildKillList, computeHealthScore } from "@/lib/audit-rules";
+import { buildHeuristicActions, buildKillList, computeHealthScore, filterCampaignsForOrchestration } from "@/lib/audit-rules";
 import { parseExecutableToolFromAgentJson, sanitizeAuditInsightMcp } from "@/lib/executable-meta-tool";
 import { AdVariation, AuditInsight, CampaignMetrics, PrioritizedAction, SkillType } from "@/types";
 
@@ -520,14 +520,15 @@ export async function createHealthAudit(args: {
   businessContext?: string;
 }): Promise<AuditInsight> {
   const { campaigns, targetCpa, targetRoas, businessContext } = args;
-  const killList = buildKillList(campaigns, targetCpa);
-  const heuristicActions = buildHeuristicActions(campaigns, targetCpa);
+  const orchestrationCampaigns = filterCampaignsForOrchestration(campaigns);
+  const killList = buildKillList(orchestrationCampaigns, targetCpa);
+  const heuristicActions = buildHeuristicActions(orchestrationCampaigns, targetCpa);
   const apiKey = anthropicApiKeyFromEnv();
 
   if (!apiKey) {
     return sanitizeAuditInsightMcp({
       healthScore: computeHealthScore({
-        campaigns,
+        campaigns: orchestrationCampaigns,
         targetCpa,
         killCount: killList.length,
         actionCount: heuristicActions.length
@@ -537,7 +538,7 @@ export async function createHealthAudit(args: {
     });
   }
 
-  logOrchestrationCampaigns(campaigns);
+  logOrchestrationCampaigns(orchestrationCampaigns);
 
   const domains = [
     "Budget",
@@ -553,7 +554,7 @@ export async function createHealthAudit(args: {
       runSubAgentAudit({
         apiKey,
         domain,
-        campaigns,
+        campaigns: orchestrationCampaigns,
         targetCpa,
         targetRoas,
         businessContext
@@ -567,7 +568,7 @@ export async function createHealthAudit(args: {
 
   return sanitizeAuditInsightMcp({
     healthScore: computeHealthScore({
-      campaigns,
+      campaigns: orchestrationCampaigns,
       targetCpa,
       killCount: killList.length,
       actionCount: merged.length
@@ -596,15 +597,14 @@ async function runSubAgentAudit(args: {
       "При липса на dailyBudgetMajor използвай консервативна стъпка спрямо spend/impressions. " +
       "При конкретна препоръка за дневен бюджет включи executable_tool с name adjust_budget, parameters.campaign_id и parameters.new_budget (положително число).",
     Creative:
-      "Meta: ЗАДЪЛЖИТЕЛНО за всяка кампания с platform Meta оцени CTR и hook/криейтив риск (fatigue) в reason — не пропускай кампания само защото бюджетът е наред. " +
-      "Използвай данните campaigns[].ctr, impressions, frequency. " +
-      "Google: провери Ad Copy Relevance и Quality сигналите. " +
-      "Използвай type: CREATIVE_FATIGUE или AD_COPY_RELEVANCE.",
+      "EARLY-STAGE / ENGAGEMENT: при impressions > 1000 и conversions === 0 ЗАДЪЛЖИТЕЛНО анализирай кампанията (не я пропускай). " +
+      "Оцени CTR (all) и CPC от campaigns[].ctr, campaigns[].cpcMajor: при CTR > 2% препоръчай скалиране или тест със сходни криейтиви/ъгли; при CTR < 0.8% и висок CPC флагни Creative Fatigue или слаба кука дори без продажби. " +
+      "Използвай campaigns[].frequency за fatigue контекст. Google: Ad Copy / RSA релевантност. " +
+      "type: CREATIVE_FATIGUE или AD_COPY_RELEVANCE. insightBasis: \"engagement\" когато основният сигнал е CTR/CPC; \"conversion\" когато водещи са CPA/ROAS.",
     Audience:
-      "Meta: ЗАДЪЛЖИТЕЛНО за всяка кампания с platform Meta оцени audience health: frequency, (ако няма overlap данни — изведи риск от overlap като хипотеза) и предложи корекции. " +
-      "Не пропускай кампания само защото бюджетът е наред. " +
-      "Google: използвай Audience Signals за PMax/Display. " +
-      "Използвай type: AUDIENCE_BUILDER или AUDIENCE_SIGNALS.",
+      "EARLY-STAGE / ENGAGEMENT: при impressions > 1000 и conversions === 0 не пропускай — анализирай Frequency и CPM (campaigns[].frequency, campaigns[].cpmMajor). " +
+      "При frequency > 1.5 в наличния прозорец (insights ~30 дни; отбележи в reason ако е по-кратък рън) флагни потенциален audience overlap или твърде тясна аудитория. " +
+      "Google: Audience Signals за PMax/Display. type: AUDIENCE_BUILDER или AUDIENCE_SIGNALS. insightBasis: \"engagement\" за frequency/CPM без конверсии; \"conversion\" за CPA/ROAS.",
     Technical:
       "Meta: анализирай Event Match Quality и tracking quality. " +
       "Google: приложи Negative Keyword Guard за wasted spend от нерелевантни search terms. " +
@@ -631,7 +631,8 @@ async function runSubAgentAudit(args: {
       : Math.min(3, Math.max(1, campaigns.length));
 
   const requiredOutput =
-    `Върни JSON масив с най-много ${maxActions} обекта. Всеки обект: { task, impactScore, reason, platform, type, campaignId?, actionType?, isKillRule?, executable_tool? }. ` +
+    `Върни JSON масив с най-много ${maxActions} обекта. Всеки обект: { task, impactScore, reason, platform, type, campaignId?, actionType?, isKillRule?, executable_tool?, insightBasis? }. ` +
+    'insightBasis: "engagement" когато препоръката се базира главно на CTR/CPC/frequency/CPM без стабилни конверсии; "conversion" когато водещи са CPA/ROAS/конверсии. ' +
     "campaignId: задължително копирай от campaigns[].id на съответната кампания, когато препоръката е за конкретна кампания. " +
     "executable_tool: { name: 'adjust_budget'|'pause_campaign'|'rename_campaign', parameters: { campaign_id (същото като campaignId), new_budget?, new_name? }, explanation }. " +
     "Ако препоръката съвпада с инструмент по правилата на оркестратора — ЗАДЪЛЖИТЕЛНО попълни executable_tool. " +
@@ -647,7 +648,9 @@ async function runSubAgentAudit(args: {
       targetRoas,
       businessContext: businessContext ?? "Без допълнителен контекст",
       campaignIdRule:
-        "campaigns[].id е Meta/Google campaign id — използвай го 1:1 в campaignId и в executable_tool.parameters.campaign_id за Meta."
+        "campaigns[].id е Meta/Google campaign id — използвай го 1:1 в campaignId и в executable_tool.parameters.campaign_id за Meta.",
+      leadingIndicators:
+        "При impressions > 1000 и conversions === 0: Early-Stage / Engagement Analysis — не пропускай кампанията; оцени CTR, CPC, frequency, CPM и задай insightBasis: \"engagement\" ако те водят препоръката."
     },
     campaigns
   };
@@ -665,7 +668,8 @@ async function runSubAgentAudit(args: {
         META_MCP_ORCHESTRATOR_RULES +
         "Ти си Senior Media Buyer sub-agent. Работиш само по даден домейн и връщаш валиден JSON масив. " +
         "Фокус: рентабилност, спиране на money leaks, директен тон. Отговаряй само на български. " +
-        "Критично правило: ако кампанията има под 500 импресии, маркирай я като Learning и препоръчай изчакване 48 часа, без драстични промени. " +
+        "Критично правило: под 500 импресии = Learning — изчакване ~48ч без драстични промени. " +
+        "При над 1000 импресии и 0 конверсии: премини на Engagement Analysis (CTR, CPC, frequency, CPM) — не пропускай Meta кампания само защото няма продажби. " +
         "Добавяй actionType='PAUSE' и isKillRule=true само при ясен 3x Kill Rule риск.",
       messages: [
         {
@@ -705,6 +709,7 @@ async function runSubAgentAudit(args: {
       actionType?: "PAUSE" | "ACTIVATE";
       isKillRule?: boolean;
       executable_tool?: unknown;
+      insightBasis?: string;
     }>;
     if (!Array.isArray(parsed)) return [];
 
@@ -712,6 +717,7 @@ async function runSubAgentAudit(args: {
       .filter((entry) => entry.task && entry.reason)
       .map((entry) => {
         const tool = parseExecutableToolFromAgentJson(entry.executable_tool);
+        const insightBasis = normalizeInsightBasis(entry.insightBasis);
         return {
           task: entry.task ?? "",
           impactScore: Math.max(1, Math.min(100, Number(entry.impactScore ?? 60))),
@@ -721,12 +727,18 @@ async function runSubAgentAudit(args: {
           campaignId: entry.campaignId,
           actionType: entry.actionType,
           isKillRule: Boolean(entry.isKillRule),
+          ...(insightBasis ? { insightBasis } : {}),
           ...(tool ? { executable_tool: tool } : {})
         };
       });
   } catch {
     return [];
   }
+}
+
+function normalizeInsightBasis(value?: string): "engagement" | "conversion" | undefined {
+  if (value === "engagement" || value === "conversion") return value;
+  return undefined;
 }
 
 function normalizePlatform(value?: string): "Meta" | "Google" | "Общо" {
@@ -797,4 +809,5 @@ const META_MCP_ORCHESTRATOR_RULES =
   "За Google или общи препоръки без тези инструменти — пропусни executable_tool или го задай на null. " +
   "campaign_id в parameters трябва да съвпада с campaignId на същия обект, когато има campaignId. " +
   "Разнообразие (diversity): Не отговаряй само с бюджетни препоръки. За домейни Creative и Audience задължително покрий всяка Meta кампания (CTR/hook и frequency/audience health), дори ако бюджетът изглежда достатъчен. " +
-  "За adjust_budget new_budget трябва да е съизмерим с campaigns[].dailyBudgetMajor когато е наличен (реален текущ дневен бюджет), а не произволно голямо число.";
+  "За adjust_budget new_budget трябва да е съизмерим с campaigns[].dailyBudgetMajor когато е наличен (реален текущ дневен бюджет), а не произволно голямо число. " +
+  "Когато препоръката е водена от CTR/CPC/frequency/CPM без стабилни конверсии, задължително задай insightBasis: \"engagement\" в същия JSON обект; при CPA/ROAS — insightBasis: \"conversion\".";

@@ -6,6 +6,7 @@ import { ActionDetailSheet } from "@/components/ads/action-detail-sheet";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { formatSlashDatesToBulgarian } from "@/lib/format-insight-text";
+import { ENGAGEMENT_INSIGHT_LABEL } from "@/lib/skill-agent-labels";
 import type { CampaignMetrics, PrioritizedAction } from "@/types";
 
 import { CampaignPlatformGlyph, ImpactScorePill, PlatformCornerBadge } from "./platform-icons";
@@ -39,6 +40,11 @@ export function PrioritizedActionAlert({
           <CampaignPlatformGlyph platform={action.platform} metaPlacement={action.metaPlacement} />
         ) : null}
         <ImpactScorePill score={action.impactScore} label="Въздействие" />
+        {action.insightBasis === "engagement" ? (
+          <span className="inline-flex max-w-full items-center rounded-md border border-amber-500/45 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium leading-tight text-amber-100">
+            {ENGAGEMENT_INSIGHT_LABEL}
+          </span>
+        ) : null}
       </div>
 
       <AlertTitle className="mt-2 pr-20 text-left text-base font-semibold leading-snug text-foreground">

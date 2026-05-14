@@ -7,7 +7,7 @@ import { Bot, ChevronDown, ChevronUp } from "lucide-react";
 import { ActionDetailSheet } from "@/components/ads/action-detail-sheet";
 import { Button } from "@/components/ui/button";
 import { formatSlashDatesToBulgarian } from "@/lib/format-insight-text";
-import { getSkillAgentVisualTheme, skillTypeToAgentLabel } from "@/lib/skill-agent-labels";
+import { ENGAGEMENT_INSIGHT_LABEL, getSkillAgentVisualTheme, skillTypeToAgentLabel } from "@/lib/skill-agent-labels";
 import { cn } from "@/lib/utils";
 import type { CampaignMetrics, PrioritizedAction, PrioritizedActionGroup } from "@/types";
 
@@ -37,6 +37,7 @@ export function GroupedActionCard({
   const n = group.children.length;
   const maxImpact = Math.max(...group.children.map((c) => c.impactScore), 0);
   const rep = group.children[0];
+  const groupHasEngagementInsight = group.children.some((c) => c.insightBasis === "engagement");
 
   return (
     <div className="relative min-w-0 pt-2">
@@ -59,6 +60,11 @@ export function GroupedActionCard({
             <Bot className={cn("h-4 w-4", theme.iconClass)} aria-hidden />
           </span>
           <ImpactScorePill score={maxImpact} label="Макс. въздействие" />
+          {groupHasEngagementInsight ? (
+            <span className="inline-flex max-w-full items-center rounded-md border border-amber-500/45 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium leading-tight text-amber-100">
+              {ENGAGEMENT_INSIGHT_LABEL}
+            </span>
+          ) : null}
         </div>
 
         <div className="space-y-2 px-4 pb-3 pt-2">

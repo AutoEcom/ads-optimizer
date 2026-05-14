@@ -11,11 +11,17 @@ export type CampaignMetrics = {
   spend: number;
   /** Meta: дневен бюджет в основна валута на акаунта (от Graph `daily_budget` / 100). */
   dailyBudgetMajor?: number;
+  /** Meta / Google: статус на кампанията от платформата (напр. PAUSED, ACTIVE). */
+  campaignStatus?: string;
   conversions: number;
   cpa: number;
   roas: number;
   ctr: number;
   impressions: number;
+  /** Среден CPC в основна валута (от insights или spend/clicks). */
+  cpcMajor?: number;
+  /** CPM в основна валута: spend / impressions * 1000. */
+  cpmMajor?: number;
   frequency?: number;
   impressionShare?: number;
   searchTerms?: string[];
@@ -83,6 +89,11 @@ export type PrioritizedAction = {
   /** Опционално от AI одит за по-точен UI (иначе се ползва кампанията). */
   currentCpa?: number;
   targetCpa?: number;
+  /**
+   * `engagement` — препоръката е водена от CTR/CPC/frequency/CPM (leading indicators).
+   * `conversion` — базирана главно на CPA/ROAS/конверсии.
+   */
+  insightBasis?: "engagement" | "conversion";
 };
 
 /** Виртуална група от ≥3 препоръки с един и същ `type` (виж `groupActionsByType`). */

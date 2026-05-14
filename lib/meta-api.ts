@@ -316,6 +316,21 @@ export async function fetchMetaCampaigns(
       const fallbackFrequency = Number((1 + Math.min(4, spend / Math.max(25, conversions + 1))).toFixed(2));
       const frequency = Number.isFinite(parsedFrequency) ? parsedFrequency : fallbackFrequency;
 
+      const impressions = Number(insights.impressions ?? 0);
+      const ctrVal = Number(insights.ctr ?? 0);
+      const clicks = Number(insights.clicks ?? 0);
+      const impliedClicks =
+        clicks > 0 ? clicks : ctrVal > 0 && impressions > 0 ? Math.max(1, (impressions * ctrVal) / 100) : 0;
+      const cpcFromApi = insights.cpc != null && String(insights.cpc).trim() !== "" ? Number(insights.cpc) : NaN;
+      const cpcMajor =
+        Number.isFinite(cpcFromApi) && cpcFromApi > 0
+          ? Number(cpcFromApi.toFixed(4))
+          : impliedClicks > 0
+            ? Number((spend / impliedClicks).toFixed(4))
+            : undefined;
+      const cpmMajor =
+        impressions > 0 ? Number(((spend / impressions) * 1000).toFixed(4)) : undefined;
+
       const rawDaily = campaign.daily_budget;
       const dailyMinor = rawDaily != null && String(rawDaily).trim() !== "" ? Number(rawDaily) : NaN;
       const dailyBudgetMajor =
@@ -328,11 +343,14 @@ export async function fetchMetaCampaigns(
         currencyCode,
         spend,
         ...(dailyBudgetMajor != null ? { dailyBudgetMajor } : {}),
+        ...(campaign.status ? { campaignStatus: campaign.status } : {}),
         conversions,
         cpa: Number(calculatedCpa.toFixed(2)),
         roas,
-        ctr: Number(insights.ctr ?? 0),
-        impressions: Number(insights.impressions ?? 0),
+        ctr: ctrVal,
+        impressions,
+        ...(cpcMajor != null && cpcMajor > 0 ? { cpcMajor } : {}),
+        ...(cpmMajor != null && cpmMajor > 0 ? { cpmMajor } : {}),
         frequency,
         targetCpa,
         metaPlacement

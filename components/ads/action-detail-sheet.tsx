@@ -28,7 +28,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { META_ADS_SWR_KEY } from "@/hooks/use-ad-platform-connection";
 import { formatSlashDatesToBulgarian } from "@/lib/format-insight-text";
 import { buildPendingExecution, type PendingExecution } from "@/lib/meta-mcp-pending";
-import { getSkillAgentVisualTheme, skillTypeToAgentLabel } from "@/lib/skill-agent-labels";
+import { ENGAGEMENT_INSIGHT_LABEL, getSkillAgentVisualTheme, skillTypeToAgentLabel } from "@/lib/skill-agent-labels";
 import { cn, formatCurrencyLatin } from "@/lib/utils";
 import type { CampaignMetrics, ExecutableMetaToolName, PrioritizedAction, PrioritizedActionGroup } from "@/types";
 
@@ -397,6 +397,7 @@ export function ActionDetailSheet(props: ActionDetailSheetProps) {
 
   const groupAgentTheme = isGroup && group ? getSkillAgentVisualTheme(group.type) : agentTheme;
   const groupAgentLabel = isGroup && group ? skillTypeToAgentLabel(group.type) : agentLabel;
+  const groupHasEngagementInsight = Boolean(isGroup && group?.children.some((c) => c.insightBasis === "engagement"));
 
   function currencyForBulkBody(body: PendingExecution["body"]): string {
     if (!isGroup || !group || !getCampaign) return "EUR";
@@ -425,13 +426,18 @@ export function ActionDetailSheet(props: ActionDetailSheetProps) {
                     </SheetDescription>
                   </div>
                 </div>
-                <div className={cn("flex items-center gap-2 text-xs font-medium", groupAgentTheme.agentLineClass)}>
+                <div className={cn("flex flex-wrap items-center gap-2 text-xs font-medium", groupAgentTheme.agentLineClass)}>
                   <span className={groupAgentTheme.iconWrapClass} aria-hidden>
                     <Bot className={groupAgentTheme.iconClass} />
                   </span>
                   <span>
                     Анализ от: <span className="font-semibold text-foreground/95">{groupAgentLabel}</span>
                   </span>
+                  {groupHasEngagementInsight ? (
+                    <span className="inline-flex max-w-full items-center rounded-md border border-amber-500/45 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium leading-tight text-amber-100">
+                      {ENGAGEMENT_INSIGHT_LABEL}
+                    </span>
+                  ) : null}
                 </div>
               </>
             ) : (
@@ -451,13 +457,18 @@ export function ActionDetailSheet(props: ActionDetailSheetProps) {
                     </SheetDescription>
                   </div>
                 </div>
-                <div className={cn("flex items-center gap-2 text-xs font-medium", agentTheme.agentLineClass)}>
+                <div className={cn("flex flex-wrap items-center gap-2 text-xs font-medium", agentTheme.agentLineClass)}>
                   <span className={agentTheme.iconWrapClass} aria-hidden>
                     <Bot className={agentTheme.iconClass} />
                   </span>
                   <span>
                     Анализ от: <span className="font-semibold text-foreground/95">{agentLabel}</span>
                   </span>
+                  {action.insightBasis === "engagement" ? (
+                    <span className="inline-flex max-w-full items-center rounded-md border border-amber-500/45 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium leading-tight text-amber-100">
+                      {ENGAGEMENT_INSIGHT_LABEL}
+                    </span>
+                  ) : null}
                 </div>
               </>
             )}

@@ -20,6 +20,8 @@ export const campaigns: CampaignMetrics[] = [
     roas: 1.4,
     ctr: 0.7,
     impressions: 18200,
+    frequency: 2.1,
+    cpmMajor: 23.08,
     targetCpa: 80
   },
   {
@@ -35,6 +37,9 @@ export const campaigns: CampaignMetrics[] = [
     roas: 0,
     ctr: 0.8,
     impressions: 7900,
+    frequency: 1.7,
+    cpcMajor: 2.8,
+    cpmMajor: 20.25,
     targetCpa: 55
   },
   {

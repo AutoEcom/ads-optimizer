@@ -2,6 +2,37 @@ import { type ExecutableMetaTool, CampaignMetrics, KillListItem, PrioritizedActi
 
 const KILL_RULE_MULTIPLIER = 3;
 
+/** Leading indicators: достатъчно показвания, но още без конверсии — не пропускаме кампанията. */
+const ENGAGEMENT_IMPRESSIONS_MIN = 1000;
+const CTR_STRONG_PCT = 2;
+const CTR_WEAK_PCT = 0.8;
+const FREQUENCY_AUDIENCE_WARN = 1.5;
+const FREQUENCY_CREATIVE_STRONG = 3;
+
+function isEngagementEarlyStage(campaign: CampaignMetrics): boolean {
+  return campaign.impressions > ENGAGEMENT_IMPRESSIONS_MIN && campaign.conversions === 0;
+}
+
+/** CPC в основна валута: от API или приближено от spend/импресии/CTR. */
+function effectiveCpcMajor(campaign: CampaignMetrics): number | null {
+  if (typeof campaign.cpcMajor === "number" && Number.isFinite(campaign.cpcMajor) && campaign.cpcMajor > 0) {
+    return campaign.cpcMajor;
+  }
+  const imp = campaign.impressions ?? 0;
+  const sp = campaign.spend ?? 0;
+  const ctr = campaign.ctr ?? 0;
+  if (imp <= 0 || sp <= 0 || ctr <= 0) return null;
+  const estClicks = Math.max(1, (imp * ctr) / 100);
+  return sp / estClicks;
+}
+
+function isHighCpcForEngagement(campaign: CampaignMetrics, targetCpa: number): boolean {
+  const cpc = effectiveCpcMajor(campaign);
+  if (cpc == null) return false;
+  const floor = Math.max(1.25, targetCpa * 0.12);
+  return cpc >= floor;
+}
+
 export function buildKillList(campaigns: CampaignMetrics[], targetCpa: number): KillListItem[] {
   return campaigns
     .filter((campaign) => campaign.cpa > targetCpa * KILL_RULE_MULTIPLIER)
@@ -100,18 +131,104 @@ export function buildHeuristicActions(
       });
     }
 
-    if (campaign.platform === "Meta" && typeof campaign.frequency === "number" && campaign.frequency > 3) {
+    const freq = typeof campaign.frequency === "number" && Number.isFinite(campaign.frequency) ? campaign.frequency : null;
+    const engagementEarly = isEngagementEarlyStage(campaign);
+
+    if (campaign.platform === "Meta" && freq != null && freq > FREQUENCY_CREATIVE_STRONG) {
       actions.push({
         task: `Смени криейтивите в ${campaign.campaignName}`,
         impactScore: 85,
-        reason: `Frequency ${campaign.frequency.toFixed(
+        reason: `Frequency ${freq.toFixed(
           2
-        )} > 3.0: сигнал за creative fatigue и спад в CTR.`,
+        )} > ${FREQUENCY_CREATIVE_STRONG}: сигнал за creative fatigue и спад в CTR.`,
         platform: "Meta",
         metaPlacement: campaign.metaPlacement,
         campaignId: campaign.id,
-        type: "CREATIVE_FATIGUE"
+        type: "CREATIVE_FATIGUE",
+        ...(engagementEarly ? { insightBasis: "engagement" as const } : {})
       });
+    } else if (
+      campaign.platform === "Meta" &&
+      freq != null &&
+      freq > FREQUENCY_AUDIENCE_WARN &&
+      engagementEarly
+    ) {
+      const cpm = campaign.cpmMajor;
+      const cpmBit =
+        typeof cpm === "number" && Number.isFinite(cpm) && cpm > 0
+          ? ` CPM ${cpm.toFixed(2)} подсказва натиск по аукциона/ограничена аудитория.`
+          : "";
+      actions.push({
+        task: `Прегледай аудиторията за ${campaign.campaignName}`,
+        impactScore: 68,
+        reason: `Frequency ${freq.toFixed(
+          2
+        )} (данни ~30 дни) при >${ENGAGEMENT_IMPRESSIONS_MIN} импресии и 0 конверсии: риск от audience overlap или твърде тясна аудитория.${cpmBit}`,
+        platform: "Meta",
+        metaPlacement: campaign.metaPlacement,
+        campaignId: campaign.id,
+        type: "AUDIENCE_SIGNALS",
+        insightBasis: "engagement"
+      });
+    }
+
+    if (campaign.platform === "Meta" && engagementEarly) {
+      if (campaign.ctr > CTR_STRONG_PCT) {
+        actions.push({
+          task: `Скалирай или тествай сходни криейтиви за ${campaign.campaignName}`,
+          impactScore: 74,
+          reason: `CTR ${campaign.ctr.toFixed(
+            2
+          )}% > ${CTR_STRONG_PCT}% при >${ENGAGEMENT_IMPRESSIONS_MIN} импресии и 0 конверсии — силен интерес; тествай сходни ъгли/формати или умерено скалиране след потвърждение.`,
+          platform: "Meta",
+          metaPlacement: campaign.metaPlacement,
+          campaignId: campaign.id,
+          type: "AD_COPY_RELEVANCE",
+          insightBasis: "engagement"
+        });
+      }
+      if (campaign.ctr < CTR_WEAK_PCT && isHighCpcForEngagement(campaign, targetCpa)) {
+        const cpc = effectiveCpcMajor(campaign);
+        actions.push({
+          task: `Подмени куката/криейтива за ${campaign.campaignName}`,
+          impactScore: 78,
+          reason: `CTR ${campaign.ctr.toFixed(2)}% < ${CTR_WEAK_PCT}% и висок CPC (~${
+            cpc != null ? cpc.toFixed(2) : "—"
+          }) при липса на конверсии — вероятна creative fatigue или слаба кука (leading indicators).`,
+          platform: "Meta",
+          metaPlacement: campaign.metaPlacement,
+          campaignId: campaign.id,
+          type: "CREATIVE_FATIGUE",
+          insightBasis: "engagement"
+        });
+      }
+    }
+
+    if (campaign.platform === "Google" && engagementEarly) {
+      if (campaign.ctr > CTR_STRONG_PCT) {
+        actions.push({
+          task: `Разшири тестове по копи/криейтив за ${campaign.campaignName}`,
+          impactScore: 70,
+          reason: `CTR ${campaign.ctr.toFixed(
+            2
+          )}% > ${CTR_STRONG_PCT}% при >${ENGAGEMENT_IMPRESSIONS_MIN} импресии и 0 конверсии — ангажираност без продажби; тествай нови RSA/акценти.`,
+          platform: "Google",
+          campaignId: campaign.id,
+          type: "AD_COPY_RELEVANCE",
+          insightBasis: "engagement"
+        });
+      }
+      if (campaign.ctr < CTR_WEAK_PCT && isHighCpcForEngagement(campaign, targetCpa)) {
+        actions.push({
+          task: `Подсил релевантността на обявите за ${campaign.campaignName}`,
+          impactScore: 72,
+          reason: `CTR ${campaign.ctr.toFixed(2)}% < ${CTR_WEAK_PCT}% и висок CPC при 0 конверсии — сигнал за слаба кука или ниска релевантност (engagement режим).`,
+          platform: "Google",
+          campaignId: campaign.id,
+          type: "AD_COPY_RELEVANCE",
+          insightBasis: "engagement"
+        });
+      }
     }
 
     if (
@@ -152,4 +269,18 @@ export function computeHealthScore(args: {
   const penalty =
     killCount * 18 + expensiveCampaigns * 7 + spendWithoutConversion * 8 + Math.min(actionCount, 8) * 2;
   return Math.max(0, Math.min(100, 100 - penalty));
+}
+
+/**
+ * Paused кампании без доставка в прозореца на метриките — изключваме от AI orchestration,
+ * за да не задавят евристики и Budget агента при липсващи данни (напр. стари id-та).
+ */
+export function filterCampaignsForOrchestration(campaigns: CampaignMetrics[]): CampaignMetrics[] {
+  return campaigns.filter((c) => !isStalePausedWithoutDeliverySignals(c));
+}
+
+function isStalePausedWithoutDeliverySignals(c: CampaignMetrics): boolean {
+  const st = (c.campaignStatus ?? "").toUpperCase();
+  if (st !== "PAUSED") return false;
+  return (c.impressions ?? 0) === 0 && (c.spend ?? 0) < 1;
 }

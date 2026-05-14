@@ -87,8 +87,10 @@ export async function fetchGoogleCampaigns(
     conversions: number;
     conversionsValue: number;
     impressions: number;
+    clicks: number;
     ctrWeighted: number;
     impressionShareSamples: number[];
+    campaignStatus?: string;
   };
 
   const aggById = new Map<string, Agg>();
@@ -103,7 +105,9 @@ export async function fetchGoogleCampaigns(
     const conversionsValue = Number(row.metrics?.conversionsValue ?? 0);
     const impressions = Number(row.metrics?.impressions ?? 0);
     const ctr = Number(row.metrics?.ctr ?? 0);
+    const clicks = Number(row.metrics?.clicks ?? 0);
     const impressionShareRaw = row.metrics?.searchImpressionShare;
+    const rowStatus = row.campaign?.status;
 
     const prev = aggById.get(id);
     if (!prev) {
@@ -114,19 +118,23 @@ export async function fetchGoogleCampaigns(
         conversions,
         conversionsValue,
         impressions,
+        clicks,
         ctrWeighted: ctr * impressions,
         impressionShareSamples:
-          typeof impressionShareRaw === "number" ? [impressionShareRaw * 100] : []
+          typeof impressionShareRaw === "number" ? [impressionShareRaw * 100] : [],
+        ...(rowStatus ? { campaignStatus: rowStatus } : {})
       });
     } else {
       prev.spend += spend;
       prev.conversions += conversions;
       prev.conversionsValue += conversionsValue;
       prev.impressions += impressions;
+      prev.clicks += clicks;
       prev.ctrWeighted += ctr * impressions;
       if (typeof impressionShareRaw === "number") {
         prev.impressionShareSamples.push(impressionShareRaw * 100);
       }
+      if (rowStatus) prev.campaignStatus = rowStatus;
     }
   }
 
@@ -146,6 +154,10 @@ export async function fetchGoogleCampaigns(
           )
         : Number((Math.min(95, Math.max(25, 35 + conversions * 4)) + 0.1).toFixed(1));
     const searchTerms = buildMockSearchTerms(a.name);
+    const cpcMajor =
+      a.clicks > 0 ? Number((spend / a.clicks).toFixed(4)) : undefined;
+    const cpmMajor =
+      a.impressions > 0 ? Number(((spend / a.impressions) * 1000).toFixed(4)) : undefined;
 
     return {
       id: a.id,
@@ -158,9 +170,12 @@ export async function fetchGoogleCampaigns(
       roas: Number(roas.toFixed(2)),
       ctr: ctrPct,
       impressions: a.impressions,
+      ...(cpcMajor != null && cpcMajor > 0 ? { cpcMajor } : {}),
+      ...(cpmMajor != null && cpmMajor > 0 ? { cpmMajor } : {}),
       impressionShare,
       searchTerms,
-      targetCpa
+      targetCpa,
+      ...(a.campaignStatus ? { campaignStatus: a.campaignStatus } : {})
     } satisfies CampaignMetrics;
   });
 

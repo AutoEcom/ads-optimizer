@@ -1,5 +1,8 @@
 import type { SkillType } from "@/types";
 
+/** UI: препоръка от leading indicators (CTR/CPC/frequency/CPM), не от продажби/ROAS. */
+export const ENGAGEMENT_INSIGHT_LABEL = "Based on Engagement Trends";
+
 /** Визуална тема за агент (Tailwind utility класове). */
 export type SkillAgentVisualTheme = {
   /** Текст „Анализ от:“ + име */
