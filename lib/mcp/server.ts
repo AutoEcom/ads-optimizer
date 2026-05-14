@@ -1,8 +1,11 @@
+import { logAction } from "@/lib/logger";
 import {
   bulkRenameCampaigns,
   duplicateAdSet,
-  fetchCreativePerformance,
   fetchCampaignAdAccountId,
+  fetchCampaignDailyBudgetMajor,
+  fetchCampaignNameAndStatus,
+  fetchCreativePerformance,
   metaAdAccountsMatch,
   toggleAdvantagePlusAudience,
   updateCampaignDailyBudget,
@@ -36,7 +39,24 @@ export type MetaMcpExecuteInput = {
 
 export type MetaMcpExecuteResult =
   | { ok: true; tool: MetaMcpToolName; data: Record<string, unknown> }
-  | { ok: false; tool: MetaMcpToolName; error: string };
+  | { ok: false; tool: MetaMcpToolName; error: string; verification?: Record<string, unknown> };
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** В production не позволяваме „test“ флагове да остават включени по погрешка. */
+function productionSafetyBlock(): string | null {
+  if (process.env.NODE_ENV !== "production") return null;
+  if (process.env.META_MCP_INTEGRATION_TEST === "1" || process.env.META_MCP_INTEGRATION_TEST === "true") {
+    return "META_MCP_INTEGRATION_TEST е активен — не е позволено в production.";
+  }
+  return null;
+}
+
+function isMetaMcpDryRun(): boolean {
+  return process.env.META_MCP_DRY_RUN === "1" || process.env.META_MCP_DRY_RUN === "true";
+}
 
 /**
  * MCP слой: мапва AI tool извиквания към Meta Marketing API (същата логика като `lib/meta-api`).
@@ -45,6 +65,33 @@ export type MetaMcpExecuteResult =
 export async function executeMetaMcpTool(input: MetaMcpExecuteInput): Promise<MetaMcpExecuteResult> {
   const { tool, campaign_id, accessToken, userAdAccountId } = input;
   const cid = campaign_id.trim();
+
+  const block = productionSafetyBlock();
+  if (block) {
+    logAction("meta_mcp_production_guard", {
+      campaignId: cid || null,
+      actionType: tool,
+      agentName: "mcp_server",
+      payload: { error: block, nodeEnv: process.env.NODE_ENV }
+    });
+    return { ok: false, tool, error: block };
+  }
+
+  if (isMetaMcpDryRun()) {
+    logAction("meta_mcp_dry_run", {
+      campaignId: cid || null,
+      actionType: tool,
+      agentName: "mcp_server",
+      payload: { message: "META_MCP_DRY_RUN: пропускаме реални записи към Meta." }
+    });
+    return {
+      ok: false,
+      tool,
+      error: "Режим dry-run (META_MCP_DRY_RUN): записите към Meta са изключени.",
+      verification: { dryRun: true }
+    };
+  }
+
   const campaignScopedTools = new Set<MetaMcpToolName>(["adjust_budget", "pause_campaign", "rename_campaign"]);
   if (campaignScopedTools.has(tool) && !cid) {
     return { ok: false, tool, error: "Липсва campaign_id." };
@@ -72,20 +119,202 @@ export async function executeMetaMcpTool(input: MetaMcpExecuteInput): Promise<Me
         if (b === undefined || !Number.isFinite(b)) {
           return { ok: false, tool, error: "За adjust_budget е задължително положително число new_budget." };
         }
+        let currentMajor: number | null = null;
+        try {
+          currentMajor = await fetchCampaignDailyBudgetMajor(accessToken, cid);
+        } catch {
+          currentMajor = null;
+        }
+        logAction("meta_mcp_budget_attempt", {
+          campaignId: cid,
+          actionType: "adjust_budget",
+          agentName: "mcp_server",
+          payload: { currentBudgetMajor: currentMajor, newBudgetMajor: b }
+        });
         await updateCampaignDailyBudget(accessToken, cid, b);
-        return { ok: true, tool, data: { campaign_id: cid, daily_budget_major: b } };
+        await sleep(2000);
+        let verifiedMajor: number | null = null;
+        try {
+          verifiedMajor = await fetchCampaignDailyBudgetMajor(accessToken, cid);
+        } catch {
+          verifiedMajor = null;
+        }
+        const verification: Record<string, unknown> = {
+          tool: "adjust_budget",
+          waitMs: 2000,
+          expectedDailyBudgetMajor: b,
+          readDailyBudgetMajor: verifiedMajor,
+          status: "skipped"
+        };
+        if (verifiedMajor != null) {
+          const tol = Math.max(0.02, b * 0.02);
+          if (Math.abs(verifiedMajor - b) > tol) {
+            verification.status = "failed";
+            logAction("meta_mcp_budget_verify_failed", {
+              campaignId: cid,
+              actionType: "adjust_budget",
+              agentName: "mcp_server",
+              payload: verification
+            });
+            return {
+              ok: false,
+              tool,
+              error: `Верификация неуспешна: в Meta четем дневен бюджет ${verifiedMajor}, очаквахме ${b}.`,
+              verification
+            };
+          }
+          verification.status = "verified";
+        } else {
+          logAction("meta_mcp_budget_verify_skipped", {
+            campaignId: cid,
+            actionType: "adjust_budget",
+            agentName: "mcp_server",
+            payload: { reason: "daily_budget unreadable after update" }
+          });
+        }
+        logAction("meta_mcp_budget_verify", {
+          campaignId: cid,
+          actionType: "adjust_budget",
+          agentName: "mcp_server",
+          payload: verification
+        });
+        return {
+          ok: true,
+          tool,
+          data: {
+            campaign_id: cid,
+            daily_budget_major: b,
+            previous_daily_budget_major: currentMajor,
+            verified_daily_budget_major: verifiedMajor,
+            verification
+          }
+        };
       }
       case "pause_campaign": {
+        let before: { name: string | null; status: string | null; raw?: unknown } = {
+          name: null,
+          status: null
+        };
+        try {
+          before = await fetchCampaignNameAndStatus(accessToken, cid);
+        } catch {
+          before = { name: null, status: null };
+        }
+        logAction("meta_mcp_pause_attempt", {
+          campaignId: cid,
+          actionType: "pause_campaign",
+          agentName: "mcp_server",
+          payload: { previousStatus: before.status, metaRead: before.raw }
+        });
         await updateCampaignStatus(accessToken, cid, "PAUSED");
-        return { ok: true, tool, data: { campaign_id: cid, status: "PAUSED" } };
+        await sleep(2000);
+        let after: { name: string | null; status: string | null; raw?: unknown };
+        try {
+          after = await fetchCampaignNameAndStatus(accessToken, cid);
+        } catch {
+          after = { name: null, status: null };
+        }
+        const verification: Record<string, unknown> = {
+          tool: "pause_campaign",
+          waitMs: 2000,
+          expectedStatus: "PAUSED",
+          readStatus: after.status,
+          metaReadAfter: after.raw,
+          status: "skipped"
+        };
+        if (after.status != null) {
+          if (String(after.status).toUpperCase() !== "PAUSED") {
+            verification.status = "failed";
+            logAction("meta_mcp_pause_verify_failed", {
+              campaignId: cid,
+              actionType: "pause_campaign",
+              agentName: "mcp_server",
+              payload: verification
+            });
+            return {
+              ok: false,
+              tool,
+              error: `Верификация неуспешна: статусът в Meta е „${after.status}“, очаквахме PAUSED.`,
+              verification
+            };
+          }
+          verification.status = "verified";
+        }
+        logAction("meta_mcp_pause_verify", {
+          campaignId: cid,
+          actionType: "pause_campaign",
+          agentName: "mcp_server",
+          payload: verification
+        });
+        return {
+          ok: true,
+          tool,
+          data: { campaign_id: cid, status: "PAUSED", verification }
+        };
       }
       case "rename_campaign": {
         const name = input.new_name?.trim();
         if (!name) {
           return { ok: false, tool, error: "За rename_campaign е задължително непразен new_name." };
         }
+        let beforeName: string | null = null;
+        try {
+          const b = await fetchCampaignNameAndStatus(accessToken, cid);
+          beforeName = b.name;
+        } catch {
+          beforeName = null;
+        }
+        logAction("meta_mcp_rename_attempt", {
+          campaignId: cid,
+          actionType: "rename_campaign",
+          agentName: "mcp_server",
+          payload: { previousName: beforeName, newName: name }
+        });
         await updateCampaignNameMeta(accessToken, cid, name);
-        return { ok: true, tool, data: { campaign_id: cid, name } };
+        await sleep(2000);
+        let readName: string | null = null;
+        try {
+          const a = await fetchCampaignNameAndStatus(accessToken, cid);
+          readName = a.name;
+        } catch {
+          readName = null;
+        }
+        const verification: Record<string, unknown> = {
+          tool: "rename_campaign",
+          waitMs: 2000,
+          expectedName: name,
+          readName,
+          status: "skipped"
+        };
+        if (readName != null) {
+          if (readName.trim() !== name.trim()) {
+            verification.status = "failed";
+            logAction("meta_mcp_rename_verify_failed", {
+              campaignId: cid,
+              actionType: "rename_campaign",
+              agentName: "mcp_server",
+              payload: verification
+            });
+            return {
+              ok: false,
+              tool,
+              error: `Верификация неуспешна: името в Meta е „${readName}“, очаквахме „${name}“.`,
+              verification
+            };
+          }
+          verification.status = "verified";
+        }
+        logAction("meta_mcp_rename_verify", {
+          campaignId: cid,
+          actionType: "rename_campaign",
+          agentName: "mcp_server",
+          payload: verification
+        });
+        return {
+          ok: true,
+          tool,
+          data: { campaign_id: cid, name, verification }
+        };
       }
       case "duplicate_adset": {
         const adSetId = input.ad_set_id?.trim();
@@ -111,6 +340,10 @@ export async function executeMetaMcpTool(input: MetaMcpExecuteInput): Promise<Me
       case "compare_creatives": {
         const out = await fetchCreativePerformance(accessToken, userAdAccountId);
         return { ok: true, tool, data: { rows: out.slice(0, 150) } };
+      }
+      default: {
+        const _exhaustive: never = tool;
+        return { ok: false, tool: _exhaustive, error: "Неподдържан инструмент." };
       }
     }
   } catch (e) {

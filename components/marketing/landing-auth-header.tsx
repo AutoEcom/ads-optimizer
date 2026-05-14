@@ -70,7 +70,7 @@ export function LandingAuthHeader() {
 
   return (
     <header className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-5">
-      <p className="text-lg font-semibold text-teal-300">AdGuard AI</p>
+      <p className="text-lg font-semibold text-teal-300">AdGuard</p>
       <div className="flex flex-wrap items-center gap-2">
         <Link
           href="/dashboard"

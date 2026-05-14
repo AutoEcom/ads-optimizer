@@ -25,24 +25,48 @@ export function buildHeuristicActions(
   const actions: PrioritizedAction[] = [];
 
   for (const campaign of campaigns) {
-    const hasLowBudget = campaign.spend < targetCpa * 5;
-    if (hasLowBudget) {
-      const suggestedDaily = Math.round(targetCpa * 5 * 100) / 100;
+    const minHealthyDaily = Math.round(Math.max(targetCpa * 1.25, 5) * 100) / 100;
+    const daily = campaign.dailyBudgetMajor;
+
+    const hasLowDailyBudget =
+      campaign.platform === "Meta" &&
+      typeof daily === "number" &&
+      Number.isFinite(daily) &&
+      daily > 0 &&
+      daily < minHealthyDaily;
+
+    const unknownDailyButWeakDelivery =
+      campaign.platform === "Meta" &&
+      (daily == null || !(daily > 0)) &&
+      campaign.impressions < 2500 &&
+      campaign.spend < targetCpa * 3;
+
+    if (hasLowDailyBudget || unknownDailyButWeakDelivery) {
+      const suggestedDaily =
+        typeof daily === "number" && daily > 0
+          ? Math.round(Math.max(daily * 1.2, minHealthyDaily) * 100) / 100
+          : Math.round(minHealthyDaily * 100) / 100;
+
       const metaBudgetTool: ExecutableMetaTool | undefined =
         campaign.platform === "Meta"
           ? {
               name: "adjust_budget",
               parameters: { campaign_id: campaign.id, new_budget: suggestedDaily },
               explanation:
-                "Евристика: дневният бюджет е под 5× целеви CPA; предложен минимум за стабилен learning сигнал."
+                typeof daily === "number" && daily > 0
+                  ? `Евристика: текущ дневен бюджет ${daily.toFixed(2)} е под здравословен минимум (~${minHealthyDaily.toFixed(2)}); предлагаме умерено увеличение от реалната стойност.`
+                  : `Евристика: липсва четим дневен бюджет от Meta, но доставката е слаба (ниски импресии); предлагаме минимален дневен бюджет ~${suggestedDaily.toFixed(2)}.`
             }
           : undefined;
       actions.push({
         task: `Увеличи бюджет или консолидирай ${campaign.campaignName}`,
         impactScore: 72,
-        reason: `Бюджетът е под препоръката от 5x целеви CPA (${(targetCpa * 5).toFixed(
-          2
-        )}). Липсва стабилен learning сигнал.`,
+        reason:
+          typeof daily === "number" && daily > 0
+            ? `Дневният бюджет ${daily.toFixed(2)} е под препоръчания минимум ~${minHealthyDaily.toFixed(
+                2
+              )} (≈1.25× целеви CPA). Риск от недостатъчен learning сигнал.`
+            : `Слаба доставка (импресии ${campaign.impressions}) при нисък разход; препоръчваме минимален дневен бюджет ~${suggestedDaily.toFixed(2)} след потвърждение от Meta.`,
         platform: campaign.platform,
         metaPlacement: campaign.platform === "Meta" ? campaign.metaPlacement : undefined,
         campaignId: campaign.id,

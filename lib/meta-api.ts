@@ -7,6 +7,8 @@ type MetaCampaign = {
   name: string;
   status?: string;
   objective?: string;
+  /** Минимални единици на валутата (както в Graph API). */
+  daily_budget?: string;
 };
 
 type MetaInsights = {
@@ -151,6 +153,64 @@ export async function updateCampaignDailyBudget(
   }
 }
 
+/**
+ * Чете текущия дневен бюджет на кампанията (Graph `daily_budget` в минимални единици → основна валута).
+ */
+export async function fetchCampaignDailyBudgetMajor(
+  accessToken: string,
+  campaignId: string
+): Promise<number | null> {
+  const cid = campaignId.trim();
+  if (!cid) return null;
+  const url = new URL(`https://graph.facebook.com/${META_API_VERSION}/${cid}`);
+  url.searchParams.set("fields", "daily_budget");
+  attachMetaAuthToUrl(url, accessToken);
+  const res = await fetch(url.toString(), { cache: "no-store" });
+  if (res.status === 401) {
+    const error = new Error("TOKEN_EXPIRED");
+    (error as Error & { status?: number }).status = 401;
+    throw error;
+  }
+  if (!res.ok) return null;
+  const json = (await res.json()) as { daily_budget?: string; error?: MetaGraphErrorBody["error"] };
+  if (json.error?.message) return null;
+  const raw = json.daily_budget;
+  if (raw == null || String(raw).trim() === "") return null;
+  const minor = Number(raw);
+  if (!Number.isFinite(minor) || minor <= 0) return null;
+  return Number((minor / 100).toFixed(2));
+}
+
+/** Чете `name` и `status` на кампанията (верификация след pause/rename). */
+export async function fetchCampaignNameAndStatus(
+  accessToken: string,
+  campaignId: string
+): Promise<{ name: string | null; status: string | null; raw?: unknown }> {
+  const cid = campaignId.trim();
+  if (!cid) return { name: null, status: null };
+  const url = new URL(`https://graph.facebook.com/${META_API_VERSION}/${cid}`);
+  url.searchParams.set("fields", "name,status");
+  attachMetaAuthToUrl(url, accessToken);
+  const res = await fetch(url.toString(), { cache: "no-store" });
+  if (res.status === 401) {
+    const error = new Error("TOKEN_EXPIRED");
+    (error as Error & { status?: number }).status = 401;
+    throw error;
+  }
+  if (!res.ok) {
+    return { name: null, status: null, raw: { httpStatus: res.status } };
+  }
+  const json = (await res.json()) as { name?: string; status?: string; error?: MetaGraphErrorBody["error"] };
+  if (json.error?.message) {
+    return { name: null, status: null, raw: json.error };
+  }
+  return {
+    name: json.name != null ? String(json.name) : null,
+    status: json.status != null ? String(json.status) : null,
+    raw: { name: json.name, status: json.status }
+  };
+}
+
 export async function updateCampaignNameMeta(
   accessToken: string,
   campaignId: string,
@@ -215,7 +275,7 @@ export async function fetchMetaCampaigns(
   const currencyCode = accountPayload.currency ?? "EUR";
 
   const campaignsUrl = new URL(baseUrl);
-  campaignsUrl.searchParams.set("fields", "id,name,status,objective");
+  campaignsUrl.searchParams.set("fields", "id,name,status,objective,daily_budget");
   campaignsUrl.searchParams.set("limit", "100");
   attachMetaAuthToUrl(campaignsUrl, accessToken);
 
@@ -256,12 +316,18 @@ export async function fetchMetaCampaigns(
       const fallbackFrequency = Number((1 + Math.min(4, spend / Math.max(25, conversions + 1))).toFixed(2));
       const frequency = Number.isFinite(parsedFrequency) ? parsedFrequency : fallbackFrequency;
 
+      const rawDaily = campaign.daily_budget;
+      const dailyMinor = rawDaily != null && String(rawDaily).trim() !== "" ? Number(rawDaily) : NaN;
+      const dailyBudgetMajor =
+        Number.isFinite(dailyMinor) && dailyMinor > 0 ? Number((dailyMinor / 100).toFixed(2)) : undefined;
+
       return {
         id: campaign.id,
         platform: "Meta",
         campaignName: campaign.name,
         currencyCode,
         spend,
+        ...(dailyBudgetMajor != null ? { dailyBudgetMajor } : {}),
         conversions,
         cpa: Number(calculatedCpa.toFixed(2)),
         roas,

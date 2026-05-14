@@ -86,7 +86,10 @@ function buildMcpRequestWithLog(
   let oldVal: string | number | null = null;
   let newVal: string | number | null = null;
   if (tool === "adjust_budget") {
-    oldVal = null;
+    oldVal =
+      typeof campaign?.dailyBudgetMajor === "number" && Number.isFinite(campaign.dailyBudgetMajor)
+        ? campaign.dailyBudgetMajor
+        : null;
     newVal = pending.body.new_budget ?? null;
   } else if (tool === "pause_campaign") {
     oldVal = "ACTIVE";
@@ -358,8 +361,18 @@ export function ActionDetailSheet(props: ActionDetailSheetProps) {
     }
   }
 
+  const computedCpaFromMetrics =
+    campaign && campaign.conversions > 0 && Number.isFinite(campaign.spend)
+      ? Number((campaign.spend / campaign.conversions).toFixed(4))
+      : null;
   const effectiveCpa = asFiniteNumber(
-    typeof action.currentCpa === "number" && Number.isFinite(action.currentCpa) ? action.currentCpa : campaign?.cpa
+    typeof action.currentCpa === "number" && Number.isFinite(action.currentCpa) && action.currentCpa > 0
+      ? action.currentCpa
+      : typeof campaign?.cpa === "number" && campaign.cpa > 0
+        ? campaign.cpa
+        : computedCpaFromMetrics && computedCpaFromMetrics > 0
+          ? computedCpaFromMetrics
+          : null
   );
 
   const effectiveTargetCpa =

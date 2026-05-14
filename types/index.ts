@@ -9,6 +9,8 @@ export type CampaignMetrics = {
   campaignName: string;
   currencyCode: string;
   spend: number;
+  /** Meta: дневен бюджет в основна валута на акаунта (от Graph `daily_budget` / 100). */
+  dailyBudgetMajor?: number;
   conversions: number;
   cpa: number;
   roas: number;

@@ -1,3 +1,9 @@
+import {
+  logOrchestrationCampaigns,
+  logSubAgentHttpError,
+  logSubAgentInstructions,
+  logSubAgentRawLlmResponse
+} from "@/lib/agents/orchestrator";
 import { buildHeuristicActions, buildKillList, computeHealthScore } from "@/lib/audit-rules";
 import { parseExecutableToolFromAgentJson, sanitizeAuditInsightMcp } from "@/lib/executable-meta-tool";
 import { AdVariation, AuditInsight, CampaignMetrics, PrioritizedAction, SkillType } from "@/types";
@@ -531,6 +537,8 @@ export async function createHealthAudit(args: {
     });
   }
 
+  logOrchestrationCampaigns(campaigns);
+
   const domains = [
     "Budget",
     "Creative",
@@ -564,7 +572,7 @@ export async function createHealthAudit(args: {
       killCount: killList.length,
       actionCount: merged.length
     }),
-    prioritizedActions: attachCampaignPlatformTruth(merged.slice(0, 8), campaigns),
+    prioritizedActions: attachCampaignPlatformTruth(merged.slice(0, 12), campaigns),
     killList
   });
 }
@@ -583,13 +591,18 @@ async function runSubAgentAudit(args: {
       "Meta: приложи Scaling Roadmap (поетапно вдигане на бюджет при стабилен CPA/ROAS). " +
       "Google: анализирай Budget Sufficiency (дали бюджетът ограничава Impression Share и конверсии). " +
       "Използвай type: SCALING_STRATEGY или BUDGET_SUFFICIENCY. " +
-      "Budget agent / Meta: при конкретна препоръка за дневен бюджет ЗАДЪЛЖИТЕЛНО включи executable_tool с name adjust_budget, parameters.campaign_id и parameters.new_budget (положително число).",
+      "Budget agent / Meta: при adjust_budget ЗАДЪЛЖИТЕЛНО задай new_budget от реалния дневен бюджет campaigns[].dailyBudgetMajor (увеличение ~10–25%), ако полето е налично; " +
+      "никога не използвай статично „5× целеви CPA“ ако това драстично надхвърля текущия дневен бюджет без обосновка. " +
+      "При липса на dailyBudgetMajor използвай консервативна стъпка спрямо spend/impressions. " +
+      "При конкретна препоръка за дневен бюджет включи executable_tool с name adjust_budget, parameters.campaign_id и parameters.new_budget (положително число).",
     Creative:
-      "Meta: провери Creative Fatigue и hook стратегия при висока frequency/нисък CTR. " +
+      "Meta: ЗАДЪЛЖИТЕЛНО за всяка кампания с platform Meta оцени CTR и hook/криейтив риск (fatigue) в reason — не пропускай кампания само защото бюджетът е наред. " +
+      "Използвай данните campaigns[].ctr, impressions, frequency. " +
       "Google: провери Ad Copy Relevance и Quality сигналите. " +
       "Използвай type: CREATIVE_FATIGUE или AD_COPY_RELEVANCE.",
     Audience:
-      "Meta: предложи Audience Builder идеи (LAL, interests, broad+advantage). " +
+      "Meta: ЗАДЪЛЖИТЕЛНО за всяка кампания с platform Meta оцени audience health: frequency, (ако няма overlap данни — изведи риск от overlap като хипотеза) и предложи корекции. " +
+      "Не пропускай кампания само защото бюджетът е наред. " +
       "Google: използвай Audience Signals за PMax/Display. " +
       "Използвай type: AUDIENCE_BUILDER или AUDIENCE_SIGNALS.",
     Technical:
@@ -612,12 +625,41 @@ async function runSubAgentAudit(args: {
   const headers = anthropicJsonHeaders(apiKey);
   logAnthropicOutbound(`runSubAgentAudit:${domain}`, url, headers);
 
+  const maxActions =
+    domain === "Creative" || domain === "Audience"
+      ? Math.min(6, Math.max(1, campaigns.length))
+      : Math.min(3, Math.max(1, campaigns.length));
+
+  const requiredOutput =
+    `Върни JSON масив с най-много ${maxActions} обекта. Всеки обект: { task, impactScore, reason, platform, type, campaignId?, actionType?, isKillRule?, executable_tool? }. ` +
+    "campaignId: задължително копирай от campaigns[].id на съответната кампания, когато препоръката е за конкретна кампания. " +
+    "executable_tool: { name: 'adjust_budget'|'pause_campaign'|'rename_campaign', parameters: { campaign_id (същото като campaignId), new_budget?, new_name? }, explanation }. " +
+    "Ако препоръката съвпада с инструмент по правилата на оркестратора — ЗАДЪЛЖИТЕЛНО попълни executable_tool. " +
+    "Ако няма валидни препоръки за домейна, върни празен масив [].";
+
+  const userMessagePayload = {
+    mode: "sub-agent-audit",
+    domain,
+    domainPlaybook: domainPlaybook[domain],
+    requiredOutput,
+    context: {
+      targetCpa,
+      targetRoas,
+      businessContext: businessContext ?? "Без допълнителен контекст",
+      campaignIdRule:
+        "campaigns[].id е Meta/Google campaign id — използвай го 1:1 в campaignId и в executable_tool.parameters.campaign_id за Meta."
+    },
+    campaigns
+  };
+
+  logSubAgentInstructions(domain, domainPlaybook[domain], userMessagePayload);
+
   const response = await fetch(url, {
     method: "POST",
     headers,
     body: JSON.stringify({
       model: CLAUDE_MODEL,
-      max_tokens: 650,
+      max_tokens: campaigns.length > 4 ? 900 : 700,
       temperature: 0.1,
       system:
         META_MCP_ORCHESTRATOR_RULES +
@@ -628,37 +670,26 @@ async function runSubAgentAudit(args: {
       messages: [
         {
           role: "user",
-          content: JSON.stringify(
-            {
-              mode: "sub-agent-audit",
-              domain,
-              domainPlaybook: domainPlaybook[domain],
-              requiredOutput:
-                "Върни JSON масив max 3 обекта. Всеки обект: { task, impactScore, reason, platform, type, campaignId?, actionType?, isKillRule?, executable_tool? }. " +
-                "campaignId: задължително копирай от campaigns[].id на съответната кампания, когато препоръката е за конкретна кампания. " +
-                "executable_tool: { name: 'adjust_budget'|'pause_campaign'|'rename_campaign', parameters: { campaign_id (същото като campaignId), new_budget?, new_name? }, explanation }. " +
-                "Ако препоръката съвпада с инструмент по правилата на оркестратора — ЗАДЪЛЖИТЕЛНО попълни executable_tool.",
-              context: {
-                targetCpa,
-                targetRoas,
-                businessContext: businessContext ?? "Без допълнителен контекст",
-                campaignIdRule:
-                  "campaigns[].id е Meta/Google campaign id — използвай го 1:1 в campaignId и в executable_tool.parameters.campaign_id за Meta."
-              },
-              campaigns
-            },
-            null,
-            2
-          )
+          content: JSON.stringify(userMessagePayload, null, 2)
         }
       ]
     }),
     cache: "no-store"
   });
 
-  if (!response.ok) return [];
+  if (!response.ok) {
+    let snippet = "";
+    try {
+      snippet = await response.text();
+    } catch {
+      snippet = "";
+    }
+    logSubAgentHttpError(domain, response.status, snippet);
+    return [];
+  }
   const payload = (await response.json()) as ClaudeMessageResponse;
   const text = payload.content?.find((entry) => entry.type === "text")?.text ?? "";
+  logSubAgentRawLlmResponse(domain, text);
   const jsonStart = text.indexOf("[");
   const jsonEnd = text.lastIndexOf("]");
   if (jsonStart === -1 || jsonEnd === -1) return [];
@@ -739,7 +770,10 @@ function normalizeSkillType(value?: string): SkillType | undefined {
 function dedupeActions(actions: PrioritizedAction[]) {
   const map = new Map<string, PrioritizedAction>();
   for (const action of actions) {
-    const key = `${action.platform}:${action.task.trim().toLowerCase()}`;
+    const typeKey = (action.type ?? "na").toLowerCase();
+    const cid = (action.campaignId ?? "none").trim().toLowerCase();
+    const taskKey = action.task.trim().toLowerCase().slice(0, 160);
+    const key = `${action.platform}|${cid}|${typeKey}|${taskKey}`;
     const existing = map.get(key);
     if (!existing || existing.impactScore < action.impactScore) {
       map.set(key, action);
@@ -761,4 +795,6 @@ const META_MCP_ORCHESTRATOR_RULES =
   '"parameters": { "campaign_id": "<копирай точно от campaigns[].id>", "new_budget"?: number, "new_name"?: string }, ' +
   '"explanation": "кратко защо извикваш инструмента" } }. ' +
   "За Google или общи препоръки без тези инструменти — пропусни executable_tool или го задай на null. " +
-  "campaign_id в parameters трябва да съвпада с campaignId на същия обект, когато има campaignId.";
+  "campaign_id в parameters трябва да съвпада с campaignId на същия обект, когато има campaignId. " +
+  "Разнообразие (diversity): Не отговаряй само с бюджетни препоръки. За домейни Creative и Audience задължително покрий всяка Meta кампания (CTR/hook и frequency/audience health), дори ако бюджетът изглежда достатъчен. " +
+  "За adjust_budget new_budget трябва да е съизмерим с campaigns[].dailyBudgetMajor когато е наличен (реален текущ дневен бюджет), а не произволно голямо число.";

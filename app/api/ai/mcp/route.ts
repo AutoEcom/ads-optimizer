@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { getAdPlatformTokenRow } from "@/lib/ad-platform-token-server";
+import { logAction } from "@/lib/logger";
 import { executeMetaMcpTool, type MetaMcpToolName } from "@/lib/mcp/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
@@ -147,6 +148,8 @@ export async function POST(request: Request) {
       );
     }
 
+    const logCtx = sanitizeLogContext(body.log_context);
+
     const result = await executeMetaMcpTool({
       tool,
       campaign_id: campaignId,
@@ -161,6 +164,40 @@ export async function POST(request: Request) {
     });
 
     if (!result.ok) {
+      if (logCtx) {
+        try {
+          const { error: failLogErr } = await supabase.from("execution_logs").insert({
+            user_id: user.id,
+            platform: "Meta",
+            campaign_id: campaignId || null,
+            campaign_name: logCtx.campaign_name,
+            action_taken: MCP_ACTION_LOG[tool],
+            reason: `${logCtx.agent_label} неуспешно ${logCtx.action_type_bg} за кампания ${logCtx.campaign_name}.`,
+            details: {
+              old_value: logCtx.old_value ?? null,
+              new_value: logCtx.new_value ?? null,
+              status: "failed",
+              error: result.error ?? "unknown",
+              verification: result.verification ?? null
+            }
+          });
+          if (failLogErr) {
+            logAction("execution_logs_insert_warn", {
+              campaignId: campaignId || null,
+              actionType: tool,
+              agentName: "api_ai_mcp",
+              payload: { phase: "failure_log", message: failLogErr.message }
+            });
+          }
+        } catch (logErr) {
+          logAction("execution_logs_insert_warn", {
+            campaignId: campaignId || null,
+            actionType: tool,
+            agentName: "api_ai_mcp",
+            payload: { phase: "failure_log_exception", error: String(logErr) }
+          });
+        }
+      }
       const isToken = result.error === "TOKEN_EXPIRED";
       return NextResponse.json(
         {
@@ -173,7 +210,6 @@ export async function POST(request: Request) {
       );
     }
 
-    const logCtx = sanitizeLogContext(body.log_context);
     if (logCtx) {
       const message = `${logCtx.agent_label} промени ${logCtx.action_type_bg} за кампания ${logCtx.campaign_name}.`;
       const { error: logError } = await supabase.from("execution_logs").insert({
@@ -186,11 +222,20 @@ export async function POST(request: Request) {
         details: {
           old_value: logCtx.old_value ?? null,
           new_value: logCtx.new_value ?? null,
-          status: "success"
+          status: "success",
+          verification:
+            result.data && typeof result.data === "object" && "verification" in result.data
+              ? (result.data as { verification?: unknown }).verification ?? null
+              : null
         }
       });
       if (logError) {
-        console.warn("[api/ai/mcp] execution_logs insert:", logError.message);
+        logAction("execution_logs_insert_warn", {
+          campaignId: campaignId || null,
+          actionType: tool,
+          agentName: "api_ai_mcp",
+          payload: { phase: "success_log", message: logError.message }
+        });
       }
     }
 
@@ -202,7 +247,12 @@ export async function POST(request: Request) {
         { status: 401 }
       );
     }
-    console.error("[api/ai/mcp]", error);
+    logAction("api_ai_mcp_error", {
+      campaignId: null,
+      actionType: "mcp_route",
+      agentName: "api_ai_mcp",
+      payload: { error: String(error) }
+    });
     return NextResponse.json(
       { error: "Вътрешна грешка при MCP изпълнение. Опитайте отново по-късно." },
       { status: 500 }

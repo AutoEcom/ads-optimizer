@@ -66,12 +66,24 @@ export function buildPendingExecution(
     };
   }
   if (action.type === "BUDGET_SUFFICIENCY" && targetCpaProp && targetCpaProp > 0) {
-    const suggested = Math.round(Math.max(targetCpaProp * 5, campaign.spend * 1.1, 1) * 100) / 100;
+    const daily =
+      typeof campaign.dailyBudgetMajor === "number" &&
+      Number.isFinite(campaign.dailyBudgetMajor) &&
+      campaign.dailyBudgetMajor > 0
+        ? campaign.dailyBudgetMajor
+        : null;
+    const floor = Math.round(Math.max(targetCpaProp * 1.25, 5) * 100) / 100;
+    const suggested =
+      daily != null
+        ? Math.round(Math.max(daily * 1.15, floor) * 100) / 100
+        : Math.round(floor * 100) / 100;
     return {
       body: { tool: "adjust_budget", campaign_id: cid, new_budget: suggested },
       explanation: ext?.explanation?.trim() || formatSlashDatesToBulgarian(action.reason),
       summaryLines: [
-        `Дневният бюджет ще бъде зададен на ${formatCurrencyLatin(suggested, cur)} (препоръчана стойност: max(5× целеви CPA, 110% от текущия разход)).`
+        daily != null
+          ? `Дневният бюджет ще бъде зададен на ${formatCurrencyLatin(suggested, cur)} (база: текущ ${formatCurrencyLatin(daily, cur)}, не статично 5× CPA).`
+          : `Дневният бюджет ще бъде зададен на ${formatCurrencyLatin(suggested, cur)} (няма записан дневен бюджет от Meta — ползваме консервативен минимум от целевия CPA).`
       ]
     };
   }
