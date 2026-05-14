@@ -11,7 +11,7 @@ import { ENGAGEMENT_INSIGHT_LABEL, getSkillAgentVisualTheme, skillTypeToAgentLab
 import { cn } from "@/lib/utils";
 import type { CampaignMetrics, PrioritizedAction, PrioritizedActionGroup } from "@/types";
 
-import { CampaignPlatformGlyph, ImpactScorePill, PlatformCornerBadge } from "./platform-icons";
+import { CampaignPlatformGlyph, ImpactScorePill } from "./platform-icons";
 
 type GroupedActionCardProps = {
   group: PrioritizedActionGroup;
@@ -51,14 +51,13 @@ export function GroupedActionCard({
       />
 
       <div className="relative z-[2] min-w-0 overflow-hidden rounded-lg border border-primary/45 bg-card pt-2 shadow-md">
-        <div className="absolute right-3 top-3 z-[3]">
-          <PlatformCornerBadge platform={rep.platform} metaPlacement={rep.metaPlacement} />
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2 px-4 pr-20 pt-1">
+        <div className="flex flex-wrap items-center gap-2 px-4 pt-1">
           <span className={cn("inline-flex shrink-0 items-center justify-center rounded-lg p-1.5", theme.iconWrapClass)}>
             <Bot className={cn("h-4 w-4", theme.iconClass)} aria-hidden />
           </span>
+          {rep.platform !== "Общо" ? (
+            <CampaignPlatformGlyph platform={rep.platform} metaPlacement={rep.metaPlacement} />
+          ) : null}
           <ImpactScorePill score={maxImpact} label="Макс. въздействие" />
           {groupHasEngagementInsight ? (
             <span className="inline-flex max-w-full items-center rounded-md border border-amber-500/45 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium leading-tight text-amber-100">
@@ -68,7 +67,7 @@ export function GroupedActionCard({
         </div>
 
         <div className="space-y-2 px-4 pb-3 pt-2">
-          <p className={cn("pr-16 text-left text-sm font-medium leading-snug", theme.agentLineClass)}>
+          <p className={cn("text-left text-sm font-medium leading-snug", theme.agentLineClass)}>
             {agentLabel} откри <span className="font-semibold text-foreground/95">{n}</span> подобни оптимизации
           </p>
           <p className="line-clamp-2 break-words text-xs text-muted-foreground">

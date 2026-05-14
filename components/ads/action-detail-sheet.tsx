@@ -28,7 +28,7 @@ import {
 } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { META_ADS_SWR_KEY } from "@/hooks/use-ad-platform-connection";
-import { buildCreativePageHref } from "@/lib/creative-redirect";
+import { buildCreativePageHref, fetchCampaignPrimaryAdId } from "@/lib/creative-redirect";
 import { formatSlashDatesToBulgarian } from "@/lib/format-insight-text";
 import { buildPendingExecution, type PendingExecution } from "@/lib/meta-mcp-pending";
 import { ENGAGEMENT_INSIGHT_LABEL, getSkillAgentVisualTheme, skillTypeToAgentLabel } from "@/lib/skill-agent-labels";
@@ -181,6 +181,7 @@ export function ActionDetailSheet(props: ActionDetailSheetProps) {
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkQueue, setBulkQueue] = useState<PendingExecution[]>([]);
+  const [creativeNavBusy, setCreativeNavBusy] = useState(false);
 
   const router = useRouter();
 
@@ -208,7 +209,10 @@ export function ActionDetailSheet(props: ActionDetailSheetProps) {
   const canRunAuto = Boolean(canUseMetaMcp && pendingResolved);
 
   const isRedirectCreative = action.executable === true && action.actionUiTemplate === "redirect_creative";
-  const creativeNavigateHref = isRedirectCreative ? buildCreativePageHref(action, campaign) : null;
+  const creativeRedirectReady =
+    isRedirectCreative &&
+    Boolean((action.campaignId ?? "").trim()) &&
+    Boolean((action.recommendation ?? action.reason ?? "").trim());
 
   const bulkExecutable = isGroup
     ? children
@@ -600,16 +604,34 @@ export function ActionDetailSheet(props: ActionDetailSheetProps) {
                 type="button"
                 variant="outline"
                 className="w-full border-teal-500/45 bg-teal-500/10 text-teal-100 hover:bg-teal-500/15"
-                disabled={!creativeNavigateHref}
+                disabled={!creativeRedirectReady || creativeNavBusy}
                 title={
-                  !creativeNavigateHref
+                  !creativeRedirectReady
                     ? "Липсват campaignId или контекст за преход към AI креатив."
                     : undefined
                 }
                 onClick={() => {
-                  if (creativeNavigateHref) router.push(creativeNavigateHref as Route);
+                  if (!creativeRedirectReady || creativeNavBusy) return;
+                  void (async () => {
+                    setCreativeNavBusy(true);
+                    try {
+                      const cid = (action.campaignId ?? "").trim();
+                      const adId = cid ? await fetchCampaignPrimaryAdId(cid) : null;
+                      const href = buildCreativePageHref(action, campaign, adId);
+                      if (href) {
+                        router.push(href as Route);
+                      } else {
+                        toast.message("Неуспешен преход", {
+                          description: "Липсват данни за линк към AI креатив."
+                        });
+                      }
+                    } finally {
+                      setCreativeNavBusy(false);
+                    }
+                  })();
                 }}
               >
+                {creativeNavBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                 Генерирай с AI
               </Button>
             ) : (

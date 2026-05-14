@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { BlockMath } from "react-katex";
-import { Info, Link2Off, Save } from "lucide-react";
+import { Info, Link2Off, Loader2, Save } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -49,6 +49,14 @@ export default function SettingsPage() {
   const [googleNeedsReconnect, setGoogleNeedsReconnect] = useState(false);
   const [cpaHelpOpen, setCpaHelpOpen] = useState(false);
   const [roasHelpOpen, setRoasHelpOpen] = useState(false);
+  const [devFaucetBusy, setDevFaucetBusy] = useState(false);
+
+  const showDevCreditFaucet = useMemo(
+    () =>
+      process.env.NODE_ENV === "development" ||
+      process.env.NEXT_PUBLIC_ADS_DEV_CREDIT_FAUCET === "1",
+    []
+  );
 
   useEffect(() => {
     async function load() {
@@ -157,6 +165,28 @@ export default function SettingsPage() {
       router.refresh();
     } catch (error) {
       setMessage((error as Error).message || "Неуспешно запазване на Meta акаунта.");
+    }
+  }
+
+  async function grantDevTestCredits() {
+    setDevFaucetBusy(true);
+    try {
+      const res = await fetch("/api/credits/dev-faucet", { method: "POST" });
+      const j = (await res.json()) as { error?: string; creditsBalance?: number; added?: number };
+      if (!res.ok) {
+        throw new Error(typeof j.error === "string" ? j.error : `HTTP ${res.status}`);
+      }
+      toast({
+        title: "Успешно!",
+        description: `Оставащи кредити: ${typeof j.creditsBalance === "number" ? j.creditsBalance : "—"} (+${j.added ?? 50} тестови)`
+      });
+    } catch (error) {
+      toast({
+        title: "Dev faucet",
+        description: error instanceof Error ? error.message : "Неуспешно добавяне на кредити."
+      });
+    } finally {
+      setDevFaucetBusy(false);
     }
   }
 
@@ -388,6 +418,29 @@ export default function SettingsPage() {
               </div>
             </div>
           </section>
+
+          {showDevCreditFaucet ? (
+            <section className="space-y-3 rounded-xl border border-dashed border-amber-500/45 bg-amber-950/15 p-4 sm:p-5">
+              <div className="space-y-1">
+                <h2 className="text-base font-semibold text-amber-100">Тестови кредити (dev)</h2>
+                <p className="text-sm text-muted-foreground">
+                  Временен бутон за локални тестове: добавя +50 към <span className="font-mono text-xs">credits_balance</span> в
+                  Supabase. API работи в <span className="font-mono text-xs">development</span> или при{" "}
+                  <span className="font-mono text-xs">ADS_DEV_CREDIT_FAUCET=1</span> на сървъра.
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                className="border-amber-500/50 text-amber-50 hover:bg-amber-950/40"
+                disabled={devFaucetBusy}
+                onClick={() => void grantDevTestCredits()}
+              >
+                {devFaucetBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                Add +50 Test Credits
+              </Button>
+            </section>
+          ) : null}
 
           {message ? <p className="text-sm text-teal-300">{message}</p> : null}
         </CardContent>

@@ -161,16 +161,36 @@ export async function executeCampaignAction(args: {
   }
 }
 
+export type CreativeGenerationMeta = {
+  currentAd?: { headline: string; bodyText: string } | null;
+  optimizationReason?: string | null;
+};
+
 export async function generateAdVariations(
-  productDescription: string
+  productDescription: string,
+  meta?: CreativeGenerationMeta | null
 ): Promise<{ variants: AdVariation[]; creditsBalance?: number }> {
+  const body: Record<string, unknown> = {
+    productDescription,
+    _nonce: Math.random()
+  };
+  if (meta?.optimizationReason?.trim()) {
+    body.optimizationReason = meta.optimizationReason.trim();
+  }
+  if (meta?.currentAd && (meta.currentAd.headline || meta.currentAd.bodyText)) {
+    body.currentAd = {
+      headline: meta.currentAd.headline,
+      bodyText: meta.currentAd.bodyText
+    };
+  }
+
   const response = await fetch("/api/ai/creative/generate", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "Cache-Control": "no-cache"
     },
-    body: JSON.stringify({ productDescription, _nonce: Math.random() }),
+    body: JSON.stringify(body),
     cache: "no-store"
   });
 

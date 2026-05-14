@@ -259,29 +259,78 @@ function buildCreativeBriefForApi(rawInput: string, fetchedPagePlain: string | n
   return sanitizeCreativeBriefForClaude(parts.filter(Boolean).join("\n\n"));
 }
 
-/** Strips wrappers like Input:/От клиента: before calling Claude (`sanitizeCreativeBriefForClaude`). */
-export async function createAdVariations(productDescription: string): Promise<AdVariation[]> {
-  const rawInput = productDescription.trim();
-  const urlContext =
-    typeof rawInput === "string" && rawInput.length > 0 ? await tryFetchCreativePageContext(rawInput) : null;
+export type CreativeVariationGenerationInput = {
+  productDescription: string;
+  currentAd?: { headline: string; bodyText: string };
+  optimizationReason?: string;
+};
 
-  const creativeUserPayload = buildCreativeBriefForApi(rawInput, urlContext?.plainProse ?? null);
+function buildStructuredCreativeUserData(
+  structured: CreativeVariationGenerationInput,
+  rawInput: string,
+  fetchedPagePlain: string | null
+): string {
+  const h = structured.currentAd?.headline?.trim() || "—";
+  const b = structured.currentAd?.bodyText?.trim() || "—";
+  const reason = structured.optimizationReason?.trim() || "";
+  const extraFromUrl = buildCreativeBriefForApi(rawInput, fetchedPagePlain);
+
+  const parts: string[] = [];
+  parts.push(`Current Ad Content:\nHeadline: ${h}\nPrimary text:\n${b}`);
+  if (reason) {
+    parts.push(`Optimization Reason:\n${reason}`);
+  }
+  if (extraFromUrl.trim()) {
+    parts.push(`Additional brief / landing page context / user edits:\n${extraFromUrl.trim()}`);
+  }
+  parts.push(
+    "Task: Generate exactly 3 advertising variants that iterate on the current angle but directly address the optimization reason. Headline, body, and hook must be in Bulgarian. Respond with JSON ONLY matching the system schema."
+  );
+  return parts.join("\n\n");
+}
+
+/** Strips wrappers like Input:/От клиента: before calling Claude (`sanitizeCreativeBriefForClaude`). */
+export async function createAdVariations(
+  input: string | CreativeVariationGenerationInput
+): Promise<AdVariation[]> {
+  const structured: CreativeVariationGenerationInput | null =
+    typeof input === "object" && input !== null && "productDescription" in input
+      ? (input as CreativeVariationGenerationInput)
+      : null;
+
+  const rawInput = (structured?.productDescription ?? (typeof input === "string" ? input : "")).trim();
+
+  const urlContext = rawInput.length > 0 ? await tryFetchCreativePageContext(rawInput) : null;
+
+  const hasStructuredSignals = Boolean(
+    structured &&
+      (structured.currentAd?.headline?.trim() ||
+        structured.currentAd?.bodyText?.trim() ||
+        structured.optimizationReason?.trim())
+  );
 
   const apiKey = anthropicApiKeyFromEnv();
   if (!apiKey) {
     throw new Error("Липсва ANTHROPIC_API_KEY — не мога да извикам Claude.");
   }
 
-  const dataForModel =
-    creativeUserPayload.trim() ||
-    "Няма въведени данни за конкретна ниша. Генерирай 3 силни Direct Response примера на български за активен здравословен начин на живот като временен запълващ текст.";
+  let dataForModel: string;
+  if (hasStructuredSignals && structured) {
+    dataForModel = buildStructuredCreativeUserData(structured, rawInput, urlContext?.plainProse ?? null);
+  } else {
+    const creativeUserPayload = buildCreativeBriefForApi(rawInput, urlContext?.plainProse ?? null);
+    dataForModel =
+      creativeUserPayload.trim() ||
+      "Няма въведени данни за конкретна ниша. Генерирай 3 силни Direct Response примера на български за активен здравословен начин на живот като временен запълващ текст.";
+  }
 
   /** Единствен user turn — без chat history към Messages API. */
   const finalUserMessage = buildGenerateAdsStructuredUserMessage(dataForModel);
 
   const anthropicCreativeRequestBody = {
     model: CLAUDE_CREATIVE_MODEL,
-    max_tokens: 1400,
+    /** Три варианта с body + hook на български — 400 токена често реже JSON-а и чупи парсирането (502). */
+    max_tokens: 2500,
     temperature: 0.8,
     system: GENERATE_ADS_SYSTEM_PROMPT,
     messages: [{ role: "user" as const, content: finalUserMessage }]
@@ -311,9 +360,11 @@ export async function createAdVariations(productDescription: string): Promise<Ad
 
   if (!response.ok) {
     const errBody = await response.text().catch(() => "");
-    if (process.env.NODE_ENV !== "production" || process.env.ADS_DEBUG_ANTHROPIC === "1") {
-      console.warn("[createAdVariations] Anthropic HTTP error:", response.status, errBody.slice(0, 800));
-    }
+    console.error(
+      "[createAdVariations] Anthropic HTTP error:",
+      response.status,
+      errBody.slice(0, 1200)
+    );
     throw new Error(
       `Anthropic върна ${response.status}. ${errBody.slice(0, 400)}`.trim()
     );
@@ -339,9 +390,10 @@ export async function createAdVariations(productDescription: string): Promise<Ad
     throw new Error("Отговорът няма 3 валидни variant-а headline/body/hook.");
   }
 
+  // Без „adguard“ в regex — реални кампании/брандове като AdGuard са легитимни; търсим само явен „мета“ шум.
   const looksGeneric =
-    validated.some((v) => /adguard|оптимизатор|health audit|CPA без догадки/i.test(`${v.headline} ${v.primaryText}`)) ||
-    validated.every((v) => v.primaryText.length < 40);
+    validated.some((v) => /оптимизатор|health audit|CPA без догадки/i.test(`${v.headline} ${v.primaryText}`)) ||
+    validated.every((v) => v.primaryText.length < 22);
   if (looksGeneric) {
     throw new Error("Моделът върна твърде генерично копие — промени входа или temperature и опитай пак.");
   }

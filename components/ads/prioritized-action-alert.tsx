@@ -9,7 +9,7 @@ import { formatSlashDatesToBulgarian } from "@/lib/format-insight-text";
 import { ENGAGEMENT_INSIGHT_LABEL } from "@/lib/skill-agent-labels";
 import type { CampaignMetrics, PrioritizedAction } from "@/types";
 
-import { CampaignPlatformGlyph, ImpactScorePill, PlatformCornerBadge } from "./platform-icons";
+import { CampaignPlatformGlyph, ImpactScorePill } from "./platform-icons";
 
 export function PrioritizedActionAlert({
   action,
@@ -30,12 +30,8 @@ export function PrioritizedActionAlert({
   const sheetPending = !auditSnapshotReady || !reasonPreview.trim();
 
   return (
-    <Alert className="relative min-w-0 overflow-hidden border-primary/40 pt-2">
-      <div className="absolute right-3 top-3 z-[1]">
-        <PlatformCornerBadge platform={action.platform} metaPlacement={action.metaPlacement} />
-      </div>
-
-      <div className="flex flex-wrap items-center gap-2 pr-20 pt-1">
+    <Alert className="relative min-w-0 border-primary/40 pt-2">
+      <div className="flex flex-wrap items-center gap-2 pt-1">
         {action.platform !== "Общо" ? (
           <CampaignPlatformGlyph platform={action.platform} metaPlacement={action.metaPlacement} />
         ) : null}
@@ -47,7 +43,7 @@ export function PrioritizedActionAlert({
         ) : null}
       </div>
 
-      <AlertTitle className="mt-2 pr-20 text-left text-base font-semibold leading-snug text-foreground">
+      <AlertTitle className="mt-2 text-left text-base font-semibold leading-snug text-foreground">
         {taskBg}
       </AlertTitle>
 

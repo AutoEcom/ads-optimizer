@@ -38,12 +38,25 @@ export default function GeneratorPage() {
     if (!productDescription.trim()) return;
     setIsGenerating(true);
     try {
-      const { variants } = await generateAdVariations(productDescription.trim());
+      const { variants, creditsBalance: nextBal } = await generateAdVariations(productDescription.trim());
       setGeneratedAds(variants);
+      if (typeof nextBal === "number") {
+        toast({
+          title: "Успешно!",
+          description: `Оставащи кредити: ${nextBal}`
+        });
+      }
     } catch (error) {
       const message =
-        error instanceof Error ? error.message : "Неуспешно генериране. Провери Anthropic ключ и модела.";
-      toast({ title: "Грешка от AI", description: message });
+        error instanceof Error && error.message === "INSUFFICIENT_CREDITS"
+          ? "Нямате достатъчно кредити. Моля, обновете плана си."
+          : error instanceof Error
+            ? error.message
+            : "Неуспешно генериране. Провери Anthropic ключ и модела.";
+      toast({
+        title: error instanceof Error && error.message === "INSUFFICIENT_CREDITS" ? "Кредити" : "Грешка от AI",
+        description: message
+      });
     } finally {
       setIsGenerating(false);
     }
